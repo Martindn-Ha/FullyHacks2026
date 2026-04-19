@@ -1,4 +1,4 @@
-# FullyHacks 2026 — Tide Together (Expo + Express)
+# FullyHacks 2026 — Tide Together (Expo + Express.js)
 
 ## Purpose
 
@@ -15,14 +15,14 @@ Deeper product and integration notes: `hackathon_diabetes_app_human_delta_brief.
 | Directory | Purpose |
 |-----------|---------|
 | `mobile/` | Expo app — UI, SMS preset, calls backend |
-| `backend/` | Express API — Places, Human Delta, Gemini, rules |
+| `backend/` | Express.js API — Places, Human Delta, Gemini, rules |
 
 ## Tech stack
 
 | Area | What we use |
 |------|----------------|
 | **Mobile** | [Expo](https://expo.dev/) (React Native), **TypeScript**, React Navigation, AsyncStorage; Expo modules (e.g. Location, SMS, Notifications) |
-| **Backend** | **Node.js**, **Express**, **TypeScript** (dev: `tsx`); orchestrates risk rules, Places, Human Delta, Gemini |
+| **Backend** | **Node.js**, **Express.js**, **TypeScript** (dev: `tsx`); orchestrates risk rules, Places, Human Delta, Gemini |
 | **Maps** | **Google Places API (New)** — nearby search from the server |
 | **Retrieval** | **Human Delta** — `POST /v1/search` for indexed menus / web / docs (optional) |
 | **LLM** | **Google Gemini** — Vertex AI (default in `.env.example`) or Google AI Studio (`GEMINI_USE_VERTEX=false`) for meal synthesis and SMS check-in copy |
