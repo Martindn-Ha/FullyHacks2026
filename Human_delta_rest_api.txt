@@ -1,0 +1,264 @@
+﻿POST
+/v1/indexes
+create and start an index job
+Create and start a crawl job. The job enters `queued` status immediately and begins processing in the background. Poll `GET /v1/indexes/{id}` until `status` is `completed` before running search.
+
+
+Parameters
+source_type
+string
+required
+Type of source to index. Currently `"website"` is supported.
+
+
+name
+string
+optional
+Human-readable label for this index job.
+
+
+website.url
+string
+required
+Seed URL to start crawling from.
+
+
+website.max_pages
+number
+optional
+Maximum number of pages to crawl. Defaults to 100, max 500. Requests above 500 return a 400 error.
+
+________________
+
+
+
+
+GET
+/v1/indexes
+list index jobs for your org
+Return all index jobs for your organization, newest first. Use `limit` and `offset` to paginate through large lists.
+
+
+Parameters
+limit
+number
+optional
+Maximum number of results to return. Default 20, max 100.
+
+
+offset
+number
+optional
+Number of results to skip for pagination.
+
+
+
+
+________________
+
+
+
+
+GET
+/v1/indexes/{id}
+get status and stage breakdown
+Get current status and stage-level progress for a single index job. Each stage (discover → fetch → parse → chunk → embed → store) reports individually. Poll this endpoint until `status` is `completed` before querying search.
+
+
+Parameters
+id
+string
+required
+The `index_id` returned by `POST /v1/indexes`.
+
+
+________________
+
+
+
+
+POST
+/v1/indexes/{id}/cancel
+cancel a running job
+Cancel a running index job. Has no effect on jobs that are already `completed`, `failed`, or `cancelled`. The job transitions to `cancelled` status immediately.
+
+
+Parameters
+id
+string
+required
+The `index_id` of the job to cancel.
+
+
+________________
+
+
+
+
+POST
+/v1/search
+vector search (crawl chunks and/or org documents)
+Run semantic vector search over indexed web pages and/or uploaded org documents. Returns scored chunks with source context. Results are ranked by cosine similarity — higher score means closer semantic match.
+
+
+Parameters
+query
+string
+required
+Natural language query to search for.
+
+
+top_k
+number
+optional
+Number of results to return. Range 1–20, default 5.
+
+
+sources
+string[]
+optional
+Which corpora to search. `"web"` for crawled pages, `"documents"` for uploaded files. Omit to search both.
+
+
+index_id
+string
+optional
+Scope search to a single index. Omit to search all indexes in your org.
+
+
+________________
+
+
+
+
+POST
+/v1/fs
+virtual KB filesystem (shell, read, stat, write, delete)
+Execute an operation on the org's KB virtual filesystem. The tree mirrors your indexed sources under `/source/`, uploaded documents under `/uploads/`, and shared agent memory under `/agent/`. Use `shell` for exploration, `read` to fetch a specific file, and `write`/`delete` to manage agent memory.
+
+
+Parameters
+op
+string
+optional
+`shell` | `read` | `stat` | `write` | `delete`. Defaults to `shell`.
+
+
+cmd
+string
+optional
+Shell command to run (for `op=shell`). Supports `tree`, `ls`, `cat`, `find`, `grep`.
+
+
+path
+string
+optional
+Filesystem path (for `read`, `stat`, `write`, `delete`).
+
+
+content
+string
+optional
+File content to write (for `op=write`, `/agent/` only).
+
+
+________________
+
+
+
+
+GET
+/v1/fs
+convenience shell or stat (query: cmd, path)
+Convenience GET variant of the filesystem endpoint — no JSON body needed. Defaults to running `tree -L 4 /memory` if no `cmd` is provided. Useful for quick exploration and health checks.
+
+
+Parameters
+cmd
+string
+optional
+Shell command to run. Defaults to `tree -L 4 /memory`.
+
+
+path
+string
+optional
+Path to stat instead of running a shell command.
+
+
+________________
+
+
+
+
+POST
+/v1/documents
+upload a file into your org library
+Upload a file to your org's document library. The file is extracted, chunked, and embedded so it's included in `/v1/search` results when `sources` includes `"documents"`. Supports PDF, images, markdown, CSV, and plain text.
+
+
+Parameters
+file
+file
+required
+The file to upload (multipart/form-data). Max 10 MB. Supported: PDF, PNG, JPEG, WEBP, TXT, MD, CSV.
+
+
+category
+string
+optional
+Optional label to group documents (e.g. `onboarding`, `policies`).
+
+
+________________
+
+
+
+
+GET
+/v1/documents
+list uploaded files for your org
+List all uploaded documents for your organization. Optionally filter by category. Returns document metadata — use `GET /v1/documents/{id}/preview` to retrieve extracted text content.
+
+
+Parameters
+category
+string
+optional
+Filter results to documents with this category label.
+
+
+________________
+
+
+
+
+GET
+/v1/documents/{id}/preview
+get extracted text for a document
+Retrieve the full extracted text content for a document. Useful for verifying what was indexed, debugging retrieval issues, or feeding content directly into an LLM prompt.
+
+
+Parameters
+id
+string
+required
+The document ID (`doc_01j9...`) returned when uploading.
+
+
+________________
+
+
+
+
+DELETE
+/v1/documents/{id}
+remove a file from org library
+Permanently delete an uploaded document from your org library. The file and its indexed chunks are removed and will no longer appear in search results.
+
+
+Parameters
+id
+string
+required
+The document ID to delete.

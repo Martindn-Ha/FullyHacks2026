@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,6 +26,7 @@ export default function App() {
   const [lng, setLng] = useState('-117.8851');
   const [loading, setLoading] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   const symptomList = useMemo(
     () =>
@@ -72,13 +73,13 @@ export default function App() {
       });
 
       if (data.safety.escalate) {
-        setResultText(
-          `${data.escalationMessage ?? data.safety.message ?? 'Escalation triggered.'}\n\n${data.disclaimer ?? ''}`,
-        );
+        setResultText(data.escalationMessage ?? data.safety.message ?? 'Escalation triggered.');
         return;
       }
 
       const risk = data.risk;
+      const note = data.recommendationsNote?.trim();
+
       const header = risk
         ? `Risk score: ${risk.riskScore.toFixed(2)} (${risk.severity})\n${risk.factors.join('\n')}`
         : 'Risk unavailable.';
@@ -86,15 +87,15 @@ export default function App() {
       const recs = data.recommendations
         .map((r, idx) => {
           const note = r.groundedNote ? `\n${r.groundedNote}` : '';
-          return `${idx + 1}. ${r.place.name} (~${r.place.distanceM}m)\nHealthier-style pick: ${r.suggestedItem}\n${r.explanation}${note}`;
+          const nut = r.nutritionInfo?.trim() ? `  |  Nutrition: ${r.nutritionInfo.trim()}` : '';
+          return `${idx + 1}. ${r.place.name} (~${r.place.distanceM}m)\nHealthier-style pick: ${r.suggestedItem}${nut}\n${r.explanation}${note}`;
         })
         .join('\n\n');
 
-      const sources = data.sources
-        ? `\n\nSources: places=${data.sources.places}, guidance=${data.sources.guidance}`
-        : '';
-
-      setResultText(`${header}\n\nTop picks:\n${recs}${sources}\n\n${data.disclaimer ?? ''}`);
+      const stamp = new Date().toLocaleString();
+      const noteBlock = note ? `\n\n${note}\n` : '';
+      setResultText(`Updated: ${stamp}\n\n${header}\n\nTop picks:\n${recs || '(none)'}${noteBlock}`);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       console.error('[recommendations]', message);
@@ -109,11 +110,15 @@ export default function App() {
   return (
     <View style={styles.screen}>
       <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.title}>Healthier options nearby</Text>
         <Text style={styles.subtitle}>
-          Finds nearby restaurants, then suggests practical lower-glycemic-style picks using your context
-          (and menu snippets from Human Delta when indexed). Not medical advice.
+          Finds nearby restaurants, then suggests practical lower-glycemic-style picks using your context. Not
+          medical advice.
         </Text>
         <Text style={styles.apiHint} selectable>
           API: {getApiBaseUrl()}
@@ -184,6 +189,12 @@ export default function App() {
         <Pressable onPress={onRecommend} style={styles.primaryBtn} disabled={loading}>
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Get recommendations</Text>}
         </Pressable>
+        {loading ? (
+          <Text style={styles.loadingHint}>
+            Calling your backend (nearby places and meal suggestions). This can take up to a couple of minutes
+            the first time — scroll down for results when the spinner stops.
+          </Text>
+        ) : null}
 
         {resultText ? (
           <View style={styles.card}>
@@ -255,6 +266,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 13,
+    color: '#5c6b82',
+    lineHeight: 18,
+  },
   card: {
     marginTop: 16,
     backgroundColor: '#fff',

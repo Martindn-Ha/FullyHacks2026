@@ -49,9 +49,12 @@ export type RecommendationResponse = {
     place: { id: string; name: string; vicinity?: string; distanceM: number };
     suggestedItem: string;
     explanation: string;
+    nutritionInfo?: string;
     groundedNote?: string;
   }[];
   sources?: { places: string; guidance: string };
+  /** When spike risk is low, backend skips Maps/Gemini and explains why `recommendations` is empty. */
+  recommendationsNote?: string;
   escalationMessage?: string;
   disclaimer?: string;
 };
