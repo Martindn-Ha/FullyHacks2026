@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  ImageBackground,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,6 +26,8 @@ import {
   useSimulatedCgmPlayback,
 } from './src/clarity/useSimulatedCgmPlayback';
 import { GlucoseStripChart } from './src/components/GlucoseStripChart';
+
+const seafloorBackground = require('./assets/seafloor.png');
 
 export default function App() {
   const { width: winW, height: winH } = useWindowDimensions();
@@ -160,8 +163,12 @@ export default function App() {
   }, [playbackT]);
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <StatusBar style="dark" />
+    <ImageBackground
+      source={seafloorBackground}
+      style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+      resizeMode="cover"
+    >
+      <StatusBar style="light" />
       <ScrollView
         ref={scrollRef}
         style={styles.scrollView}
@@ -179,6 +186,13 @@ export default function App() {
 
         <View style={styles.cgmCard}>
           {glucosePoints.length >= 8 ? (
+            /*
+             * Chart sprites (see `GlucoseStripChart.tsx` header):
+             * - **Cloud / sea** — `demoGlucoseDataset` sets **cloud** height + Y offset and **sea** top Y (258 nondiabetic / 140 diabetic); sea stretches to the chart bottom (see that file).
+             * - **Dolphin** — same file: cry vs calm uses `targetBandHigh` + linear glucose at playhead; size constants; position from `points` + `playbackT`. **Graph speed** (Demo settings) changes how fast `playbackT` advances (dolphin moves faster/slower).
+             * - **All layers** — `width` (`chartW`), `height` (`chartH`) scale the SVG; `chartH` is derived from window + safe area in this file.
+             * `targetBandHigh` — band top for dolphin cry (180 diabetic / 140 nondiabetic); `targetBandLow` reserved for future chart use.
+             */
             <GlucoseStripChart
               points={glucosePoints}
               playbackT={playbackT}
@@ -287,13 +301,13 @@ export default function App() {
           </View>
         ) : null}
       </ScrollView>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f6f8fb' },
-  scrollView: { flex: 1 },
+  screen: { flex: 1 },
+  scrollView: { flex: 1, backgroundColor: 'transparent' },
   scrollContent: {
     paddingHorizontal: 14,
     paddingTop: 6,
@@ -309,8 +323,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     paddingHorizontal: 2,
   },
-  titleCompact: { fontSize: 17, fontWeight: '800', color: '#0b1f3a', letterSpacing: -0.3 },
-  demoSettingsLink: { fontSize: 14, fontWeight: '700', color: '#1f6feb' },
+  titleCompact: { fontSize: 17, fontWeight: '800', color: '#000000', letterSpacing: -0.3 },
+  demoSettingsLink: { fontSize: 14, fontWeight: '700', color: '#000000' },
   subtitle: { fontSize: 14, color: '#3a4a63', lineHeight: 20, marginBottom: 4 },
   apiHint: {
     fontSize: 12,
@@ -354,19 +368,19 @@ const styles = StyleSheet.create({
   },
   cgmClockCompact: { fontSize: 12, fontWeight: '700', color: '#64748b', textAlign: 'right', maxWidth: '42%' },
   cgmLoading: { fontSize: 14, color: '#5c6b82', fontWeight: '600' },
-  speedLabel: { marginTop: 12, fontSize: 13, fontWeight: '700', color: '#22324d' },
+  speedLabel: { marginTop: 12, fontSize: 13, fontWeight: '700', color: '#000000' },
   speedPresets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   speedChip: {
     paddingVertical: 8,
     paddingHorizontal: 11,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#c9d4e8',
-    backgroundColor: '#f8fafc',
+    borderColor: '#94a3b8',
+    backgroundColor: '#f1f5f9',
   },
-  speedChipOn: { backgroundColor: '#0f172a', borderColor: '#0f172a' },
-  speedChipText: { fontSize: 12, fontWeight: '700', color: '#334155' },
-  speedChipTextOn: { color: '#fff' },
+  speedChipOn: { backgroundColor: '#0e7490', borderColor: '#0f766e' },
+  speedChipText: { fontSize: 12, fontWeight: '700', color: '#000000' },
+  speedChipTextOn: { color: '#ffffff' },
   speedFineRow: {
     marginTop: 12,
     flexDirection: 'row',
@@ -379,12 +393,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#c9d4e8',
-    backgroundColor: '#fff',
+    borderColor: '#94a3b8',
+    backgroundColor: '#f1f5f9',
   },
-  speedFineBtnText: { fontWeight: '700', color: '#1f6feb', fontSize: 13 },
-  speedFineValue: { fontSize: 16, fontWeight: '800', color: '#0b1f3a', minWidth: 56, textAlign: 'center' },
-  label: { marginTop: 10, fontSize: 13, fontWeight: '600', color: '#22324d' },
+  speedFineBtnText: { fontWeight: '700', color: '#000000', fontSize: 13 },
+  speedFineValue: { fontSize: 16, fontWeight: '800', color: '#000000', minWidth: 56, textAlign: 'center' },
+  label: { marginTop: 10, fontSize: 13, fontWeight: '600', color: '#000000' },
   input: {
     marginTop: 6,
     borderWidth: 1,
@@ -405,10 +419,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#c9d4e8',
-    backgroundColor: '#fff',
+    borderColor: '#94a3b8',
+    backgroundColor: '#f1f5f9',
   },
-  secondaryBtnText: { color: '#1f6feb', fontWeight: '700' },
+  secondaryBtnText: { color: '#000000', fontWeight: '700' },
   primaryBtn: {
     marginTop: 10,
     backgroundColor: '#1f6feb',
@@ -421,7 +435,7 @@ const styles = StyleSheet.create({
   loadingHint: {
     marginTop: 10,
     fontSize: 13,
-    color: '#5c6b82',
+    color: '#94a3b8',
     lineHeight: 18,
   },
   card: {
