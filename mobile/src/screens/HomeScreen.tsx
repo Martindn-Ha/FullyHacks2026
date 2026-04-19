@@ -100,7 +100,7 @@ export function HomeScreen() {
         <View style={styles.titleRow}>
           <View style={styles.titleBlock}>
             <Text style={[styles.title, styles.titleInRow]} numberOfLines={2}>
-              Sugar Moonshot
+              Tide Together
             </Text>
           </View>
           <Pressable
