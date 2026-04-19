@@ -10,6 +10,7 @@ import {
 import { synthesizeGuidanceWithGemini } from '../services/llmGuidanceSynthesis.js';
 import { rankFoodRecommendations } from '../services/recommendationEngine.js';
 import { IntegrationError } from '../services/integrationError.js';
+import { tryReadClarityDemoCsv } from '../services/clarityDemoCsv.js';
 
 export const apiRouter = express.Router();
 
@@ -65,6 +66,15 @@ function integrationResponse(res: express.Response, err: unknown, route: string)
   }
   return res.status(500).json({ error: message });
 }
+
+/** Raw Clarity / Stelo-style CSV from repo `dummydata/` for the mobile simulator graph (optional). */
+apiRouter.get('/clarity-demo', (_req, res) => {
+  const raw = tryReadClarityDemoCsv();
+  if (!raw) {
+    return res.status(404).type('text/plain').send('No CSV found in dummydata/.');
+  }
+  res.type('text/csv; charset=utf-8').send(raw);
+});
 
 apiRouter.post('/risk-assessment', (req, res) => {
   const body = req.body as Partial<UserContext>;
