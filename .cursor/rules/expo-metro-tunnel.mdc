@@ -1,0 +1,21 @@
+---
+description: Expo tunnel failures — uninstall/reinstall node_modules first, then Cloudflare or LAN
+alwaysApply: true
+---
+
+# Expo Metro tunnel (`remote gone away`, `failed to start tunnel`)
+
+**Do not skip the uninstall fix.** Skipping it is the usual reason tunnel “still never works.”
+
+## When the user hits ngrok / tunnel errors — say this **in order**
+
+1. **Uninstall + reinstall Metro dependencies (mandatory first step)** — from **`mobile/`**:
+   - `rm -rf node_modules && npm install`
+   - Then retry tunnel only if they still insist on ngrok, and prefer **`npx expo start --tunnel`** (equivalent to `npm run start:tunnel`; in this repo, `npx` has been more reliable after reinstall).
+2. **If they use Homebrew ngrok separately:** `brew uninstall ngrok && brew install ngrok`, then `ngrok config add-authtoken <token>` from the ngrok dashboard.
+3. **Prefer not using Expo tunnel at all for this repo:** **`npm run start:cloudflare`** (restrictive Wi‑Fi) + backend **`npm run tunnel`** for **`EXPO_PUBLIC_API_BASE_URL`**, or **`npm run start:lan`** on open home Wi‑Fi.
+4. **Last resort:** iOS Simulator (`npx expo start`) — no Metro tunnel.
+
+Full copy-paste steps: root **README.md** → **Troubleshooting** → **`expo start --tunnel` / `remote gone away`**.
+
+Never imply the problem is only “ngrok outage” or “use Cloudflare” **without** also telling them to run **`rm -rf node_modules && npm install`** in **`mobile/`** when **`start:tunnel`** fails.
