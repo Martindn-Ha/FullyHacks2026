@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { CgmSessionProvider } from './src/context/CgmSessionContext';
+import { ContactScreen } from './src/screens/ContactScreen';
 import { EventsScreen } from './src/screens/EventsScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { RecommendationsScreen } from './src/screens/RecommendationsScreen';
@@ -57,6 +58,14 @@ export default function App() {
           options={{
             tabBarLabel: 'Events',
             tabBarIcon: ({ color, size }) => <Ionicons name="calendar-outline" size={size} color={color} />,
+          }}
+        />
+        <Tab.Screen
+          name="Contact"
+          component={ContactScreen}
+          options={{
+            tabBarLabel: 'Contact',
+            tabBarIcon: ({ color, size }) => <Ionicons name="mail-outline" size={size} color={color} />,
           }}
         />
       </Tab.Navigator>
