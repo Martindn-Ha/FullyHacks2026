@@ -18,21 +18,43 @@ Product spec notes: `hackathon_diabetes_app_human_delta_brief.txt`.
 - **Expo Go** on a physical phone (SDK matches `mobile/package.json`, e.g. Expo 54)
 - **Google Cloud** project with **Places API (New)** enabled, **billing** on, and an API key suitable for **server-side** use (see below)
 - Optional: **Human Delta** HTTP endpoint for real menu passages
-- Optional: **cloudflared** (via `npx`) for a public HTTPS URL to your laptop API when LAN access from the phone fails
+- Optional: **cloudflared** (pulled via `npx` when you run the scripts below) for public HTTPS URLs when **client isolation** (e.g. **eduroam**) prevents the phone from reaching your Mac on the local network, or when `expo start --tunnel` is unreliable
 
-## Backend
+## Quick start (two terminals)
+
+**Terminal 1 — API**
 
 ```bash
 cd backend
 cp .env.example .env
-# Edit .env: GOOGLE_MAPS_API_KEY required; HUMAN_DELTA_* optional for local Google-only testing
+# Edit .env: GOOGLE_MAPS_API_KEY required; HUMAN_DELTA_* optional
 npm install
 npm run dev
 ```
 
+For a **physical phone** on **eduroam / guest / isolated Wi‑Fi**, also run **`npm run tunnel`** in **`backend/`** and put the printed **`https://….trycloudflare.com`** into **`mobile/.env`** as **`EXPO_PUBLIC_API_BASE_URL`** (no trailing slash).
+
+**Terminal 2 — Expo**
+
+```bash
+cd mobile
+cp .env.example .env
+# Set EXPO_PUBLIC_API_BASE_URL (tunnel URL from backend if the phone cannot use your LAN IP)
+npm install
+npm run start:cloudflare
+```
+
+Open **Expo Go** and scan the QR code from the Expo terminal.
+
+**Simulator on the same Mac** (no tunnels): from **`mobile/`**, use **`npx expo start`** and press **`i`** / **`a`** — use **`http://localhost:3000`** in **`EXPO_PUBLIC_API_BASE_URL`**.
+
+After changing **`mobile/.env`**, restart Expo ( **`--clear`** if the bundle still shows old env, e.g. `npx expo start --lan --clear` when not using **`start:cloudflare`**).
+
+## Backend
+
 Server listens on **`0.0.0.0`** and **`PORT`** (default **3000**) so other devices on the LAN can connect. On startup it logs **LAN** URLs like `http://<your-en0-ip>:3000/health`.
 
-### `backend/.env` (see `.env.example`)
+### `backend/.env` (see `backend/.env.example`)
 
 - **`PORT`** — API port (default `3000`).
 - **`GOOGLE_MAPS_API_KEY`** — Required. Used with **Places API (New)** (`POST https://places.googleapis.com/v1/places:searchNearby`, headers `X-Goog-Api-Key` and `X-Goog-FieldMask`). Enable **Places API (New)** in the same Google Cloud project as the key, with **billing** enabled.
@@ -44,7 +66,7 @@ Server listens on **`0.0.0.0`** and **`PORT`** (default **3000**) so other devic
 
 - **`npm run dev`** — `tsx watch` for local development.
 - **`npm run start`** — Run once without watch.
-- **`npm run tunnel`** — `npx cloudflared tunnel --url http://127.0.0.1:3000` — exposes the API on a **`https://….trycloudflare.com`** URL so a **phone on cellular or blocked LAN** can reach your Mac. Keep this running alongside `npm run dev` when using that URL. Each new tunnel run prints a **new** URL.
+- **`npm run tunnel`** — `npx cloudflared tunnel --url http://127.0.0.1:3000` — exposes the API on a **`https://….trycloudflare.com`** URL so a **phone on cellular or blocked LAN** can reach your Mac. Keep this running alongside `npm run dev` when using that URL. Each new tunnel run prints a **new** URL; paste it into **`mobile/.env`** as **`EXPO_PUBLIC_API_BASE_URL`** (no trailing slash).
 
 ### Smoke tests (Mac)
 
@@ -59,15 +81,6 @@ Errors and requests are logged to the terminal (`[http]`, `[api …]`).
 
 ## Mobile app
 
-```bash
-cd mobile
-cp .env.example .env
-# Set EXPO_PUBLIC_API_BASE_URL (see below)
-npm install
-npx expo start --tunnel
-# After changing .env, use: npx expo start --tunnel --clear
-```
-
 ### `mobile/.env` — `EXPO_PUBLIC_API_BASE_URL`
 
 This is the **base URL of the Express API** (no trailing slash). The app calls `{base}/api/recommendations`.
@@ -76,16 +89,27 @@ This is the **base URL of the Express API** (no trailing slash). The app calls `
 |------------------------|------------------|
 | iOS **Simulator** on the same Mac | `http://localhost:3000` |
 | **Android emulator** | `http://10.0.2.2:3000` |
-| **Physical device**, same Wi‑Fi as Mac | `http://<Mac-LAN-IP>:3000` — run `ipconfig getifaddr en0` on the Mac; backend logs also print LAN `/health` URLs on startup |
-| **Physical device**, LAN blocked (guest Wi‑Fi, AP isolation, etc.) | Use **`npm run tunnel`** in `backend/` and set the printed **`https://….trycloudflare.com`** value here |
+| **Physical device**, same Wi‑Fi as Mac (no AP isolation) | `http://<Mac-LAN-IP>:3000` — run `ipconfig getifaddr en0` on the Mac; backend logs also print LAN `/health` URLs on startup |
+| **Physical device**, LAN blocked (guest Wi‑Fi, **eduroam** client isolation, etc.) | Run **`npm run tunnel`** in `backend/` and set the printed **`https://….trycloudflare.com`** value here |
 
 Important:
 
 - **`127.0.0.1` / `localhost` on a physical iPhone** refers to the **phone**, not your Mac. Use the Mac’s LAN IP or a tunnel HTTPS URL.
-- **`expo start --tunnel`** tunnels the **Metro / JS bundle**, not your custom API. The API URL is controlled only by **`EXPO_PUBLIC_API_BASE_URL`**.
-- After changing **`mobile/.env`**, restart Expo with **`--clear`** so the bundle picks up env vars.
+- **`expo start --tunnel`** ( **`npm run start:tunnel`** ) tunnels Metro via Expo’s **bundled ngrok 2.x** path. It is **often flaky or blocked** on modern networks and accounts; Expo recommends **your own** tunnel (e.g. Cloudflare) instead — see [expo/expo#43335](https://github.com/expo/expo/issues/43335). On **campus / isolated Wi‑Fi**, use **`npm run start:cloudflare`** (not **`start:lan`**, which needs the phone to reach your Mac on the LAN).
+- The **API** URL is only **`EXPO_PUBLIC_API_BASE_URL`**. A separate tunnel + **`EXPO_PACKAGER_PROXY_URL`** is only for the **Metro bundler** when you use **`start:cloudflare`**.
 
 The app shows **API: &lt;base&gt;** at the top so you can confirm what URL is baked in.
+
+### Scripts
+
+- **`npm run start:cloudflare`** — **Default for Expo Go on restrictive Wi‑Fi** (eduroam, AP isolation): **Cloudflare quick tunnel** → **Metro :8081** with **`--protocol http2`**, then **`expo start --lan`** plus **`EXPO_PACKAGER_PROXY_URL`** so the phone loads the bundle over **HTTPS**. Keep **`backend`** **`npm run dev`** and, for the API, **`npm run tunnel`** with **`EXPO_PUBLIC_API_BASE_URL`** set to that tunnel URL.
+- **`npm run start:lan`** — Only useful when the **phone can open your Mac’s LAN IP** (unrestricted home/office Wi‑Fi). **Not viable on typical eduroam** (client isolation).
+- **`npm run start`** / **`npm run start:tunnel`** — Standard Expo. **`start:tunnel` / `remote gone away`:** do **not** skip the **uninstall + reinstall** steps in **Troubleshooting** below (clean **`mobile/node_modules`**, Homebrew **ngrok** reinstall + authtoken if you use it) **before** assuming the network alone is the problem; then prefer **`start:cloudflare`** if tunnel still fails.
+
+Optional environment (shell only, not required in `.env` unless you want them permanent):
+
+- **`EDUROAM_EXPO_VERBOSE=1`** — Stream full **cloudflared** logs while **`start:cloudflare`** starts.
+- **`EDUROAM_EXPO_CF_PROTOCOL=auto`** — Let **cloudflared** pick the protocol (defaults to **`http2`** in the script).
 
 ## API overview (`/api` on the backend)
 
@@ -100,8 +124,16 @@ The app shows **API: &lt;base&gt;** at the top so you can confirm what URL is ba
 
 - **`EADDRINUSE` on port 3000** — Another Node process is using the port. Stop it, e.g. `kill $(lsof -tiTCP:3000)`, or set **`PORT=3001`** in `backend/.env` and point **`EXPO_PUBLIC_API_BASE_URL`** at the new port.
 - **Google `403` / “Places API (New) has not been used…”** — Enable **Places API (New)** for the key’s project, enable **billing**, fix **key restrictions** as above.
-- **Phone “network request timed out”** — Phone cannot reach the API host. Confirm Safari can open **`{base}/health`**. If LAN IP never loads, use **`npm run tunnel`** and the **trycloudflare** HTTPS base URL in **`mobile/.env`**.
-- **`.env` not picked up** — Restart Expo with **`--clear`**. Restart **`npm run dev`** after editing **`backend/.env`**.
+- **Phone “network request timed out”** — Phone cannot reach the API host. Confirm Safari can open **`{base}/health`**. If LAN IP never loads, use **`npm run tunnel`** in **`backend/`** and the **trycloudflare** HTTPS base URL in **`mobile/.env`**.
+- **Eduroam: phone cannot open Metro / QR never loads** — Use **`npm run start:cloudflare`** in **`mobile/`**. If **cloudflared** exits immediately, read the script’s dumped logs; try **`EDUROAM_EXPO_VERBOSE=1`**. If tunnels never come up, the network may block **outbound** tunnel traffic — try **GlobalProtect / another campus network**, or develop against the **iOS Simulator** on the Mac (`npx expo start`).
+- **Edits don’t show up live while using `start:cloudflare`** — **Fast Refresh** depends on a **WebSocket** to Metro; **trycloudflare** often breaks or delays that. Press **`r`** in the Expo terminal to **reload** after saves, or **restart** `start:cloudflare` if reload hangs.
+- **`expo start --tunnel` / `remote gone away`** — Treat this as a **broken local toolchain first**, then fall back to Cloudflare. Do these **in order** (skipping reinstall is the usual reason fixes “don’t work”):
+  1. **Clean reinstall Metro deps** (from **`mobile/`**): `rm -rf node_modules && npm install`, then **`npm run start:tunnel`** again.
+  2. **If you use Homebrew ngrok** (separate from Expo’s bundled agent): `brew uninstall ngrok && brew install ngrok` (or `brew reinstall ngrok`), then `ngrok config add-authtoken <token>` from the ngrok dashboard.
+  3. If tunnel still fails: **`npm run start:cloudflare`** in **`mobile/`** (recommended on campus / flaky ngrok); keep **`backend`** **`npm run tunnel`** for **`EXPO_PUBLIC_API_BASE_URL`** when the phone cannot use your LAN IP. See [expo#43335](https://github.com/expo/expo/issues/43335).
+  4. Last resort: **iOS Simulator** on the Mac (`npx expo start`) — no Metro tunnel needed.
+- **Stale tools after many experiments** — Same **`mobile/`** **`node_modules`** reinstall as above when Metro or **cloudflared** behave oddly; restart **`start:cloudflare`** or use **`EDUROAM_EXPO_VERBOSE=1`** to inspect tunnel logs.
+- **`.env` not picked up** — Restart Expo ( **`--clear`** if needed). Restart **`npm run dev`** after editing **`backend/.env`**.
 
 ## Git / secrets
 

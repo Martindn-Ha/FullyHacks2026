@@ -10,7 +10,11 @@ import {
 import { synthesizeGuidanceWithGemini } from '../services/llmGuidanceSynthesis.js';
 import { rankFoodRecommendations } from '../services/recommendationEngine.js';
 import { IntegrationError } from '../services/integrationError.js';
-import { tryReadClarityDemoCsv } from '../services/clarityDemoCsv.js';
+import {
+  tryReadClarityDemoCsv,
+  type ClarityDemoDataset,
+} from '../services/clarityDemoCsv.js';
+import { runSpikeModelInference } from '../services/spikeModelInference.js';
 
 export const apiRouter = express.Router();
 
@@ -68,12 +72,53 @@ function integrationResponse(res: express.Response, err: unknown, route: string)
 }
 
 /** Raw Clarity / Stelo-style CSV from repo `dummydata/` for the mobile simulator graph (optional). */
-apiRouter.get('/clarity-demo', (_req, res) => {
-  const raw = tryReadClarityDemoCsv();
+apiRouter.get('/clarity-demo', (req, res) => {
+  const q = typeof req.query.dataset === 'string' ? req.query.dataset.trim().toLowerCase() : '';
+  const dataset: ClarityDemoDataset = q === 'diabetic' ? 'diabetic' : 'nondiabetic';
+  const raw = tryReadClarityDemoCsv(dataset);
   if (!raw) {
-    return res.status(404).type('text/plain').send('No CSV found in dummydata/.');
+    return res
+      .status(404)
+      .type('text/plain')
+      .send(`No demo CSV for dataset=${dataset} in dummydata/ (expected file for this mode).`);
   }
   res.type('text/csv; charset=utf-8').send(raw);
+});
+
+/**
+ * ML glucose forecast (time-series regression in `ml_model/`, Ridge on 5-minute features). Same route name for clients.
+ * Body: `{ "points": [ { "t": ms, "mgdl": number }, ... ] }`.
+ * Requires Python + `pip install -r ml_model/requirements.txt` (venv `ml_model/.venv` recommended).
+ */
+apiRouter.post('/spike-risk', (req, res) => {
+  const raw = req.body as { points?: unknown };
+  const points = raw?.points;
+  if (!Array.isArray(points)) {
+    return res.status(400).json({ ready: false, error: 'points_must_be_array' });
+  }
+  if (points.length > 8000) {
+    return res.status(400).json({ ready: false, error: 'too_many_points' });
+  }
+  const normalized: { t: number; mgdl: number }[] = [];
+  for (const p of points) {
+    if (!p || typeof p !== 'object') continue;
+    const o = p as { t?: unknown; mgdl?: unknown };
+    const t = Number(o.t);
+    const mgdl = Number(o.mgdl);
+    if (!Number.isFinite(t) || !Number.isFinite(mgdl) || mgdl <= 0) continue;
+    normalized.push({ t, mgdl });
+  }
+  if (normalized.length === 0) {
+    return res.status(400).json({ ready: false, error: 'no_valid_points' });
+  }
+  try {
+    const out = runSpikeModelInference(normalized);
+    return res.json(out);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.error('[api /spike-risk]', message);
+    return res.status(500).json({ ready: false, error: 'server', message });
+  }
 });
 
 apiRouter.post('/risk-assessment', (req, res) => {
