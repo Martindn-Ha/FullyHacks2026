@@ -141,14 +141,26 @@ export function HomeScreen() {
             </Text>
           </View>
           <View style={styles.spikeRow}>
-            <Text style={styles.spikeLabel}>ML glucose forecast (forward window)</Text>
-            <Text style={styles.spikeValue} numberOfLines={8}>
-              {mlSpikeReady && mlSpikeProbability !== null
-                ? mlPredictedMaxMgDl !== null
-                  ? `Ridge regression predicts max glucose ≈ ${Math.round(mlPredictedMaxMgDl)} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min (target: highest reading in that window on a 5‑minute grid).\nPurple dashed trace = ramp to that predicted level (timed to the replay’s peak in the window when orange data exists), then level to the horizon — still one scalar forecast, shaped for easier reading.`
-                  : `Model score ${Math.round(mlSpikeProbability * 100)}% vs threshold ${mlSpikeThresholdMgDl ?? '—'} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min.\nWhen the API returns a predicted max, the chart shows it as the purple dashed segment.`
-                : (mlSpikeNote ?? '…')}
-            </Text>
+            {mlSpikeReady &&
+            mlPredictedMaxMgDl !== null &&
+            typeof mlPredictedMaxMgDl === 'number' &&
+            Number.isFinite(mlPredictedMaxMgDl) ? (
+              <>
+                <Text style={styles.spikePredictedValue}>
+                  ≈ {Math.round(mlPredictedMaxMgDl)} mg/dL
+                </Text>
+                <Text style={styles.spikePredictedDetail} numberOfLines={1}>
+                  Peak predicted in next {mlSpikeHorizonMinutes ?? '—'} min (5‑min grid).
+                </Text>
+              </>
+            ) : mlSpikeReady && mlSpikeProbability !== null && Number.isFinite(mlSpikeProbability) ? (
+              <Text style={styles.spikeValue}>
+                Heat {Math.round(mlSpikeProbability * 100)}% · next {mlSpikeHorizonMinutes ?? '—'} min · threshold{' '}
+                {mlSpikeThresholdMgDl ?? '—'} mg/dL
+              </Text>
+            ) : (
+              <Text style={styles.spikeValue}>{mlSpikeNote ?? 'Forecast unavailable.'}</Text>
+            )}
           </View>
         </View>
 
@@ -313,7 +325,18 @@ const styles = StyleSheet.create({
     borderTopColor: '#e5eaf3',
     gap: 4,
   },
-  spikeLabel: { fontSize: 11, fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 },
+  spikePredictedValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#0b1f3a',
+    letterSpacing: -0.5,
+  },
+  spikePredictedDetail: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 16,
+  },
   spikeValue: { fontSize: 13, fontWeight: '700', color: '#0b1f3a', lineHeight: 18 },
   cgmLoading: { fontSize: 14, color: '#5c6b82', fontWeight: '600' },
   zoomHint: {

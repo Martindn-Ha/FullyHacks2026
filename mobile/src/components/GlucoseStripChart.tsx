@@ -372,8 +372,20 @@ export const GlucoseStripChart = memo(function GlucoseStripChart({
         />
       </Svg>
       <View style={styles.axisRow}>
-        <Text style={styles.axisHint}>Past left</Text>
-        <Text style={styles.axisHint}>Green = past replay · orange = actual values ahead of dolphin</Text>
+        <View style={styles.legendRow}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendSwatch, { backgroundColor: '#5a9d86' }]} />
+            <Text style={styles.legendLabel}>Past</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendSwatch, { backgroundColor: '#7c3aed' }]} />
+            <Text style={styles.legendLabel}>Prediction</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendSwatch, { backgroundColor: '#ea580c' }]} />
+            <Text style={styles.legendLabel}>True value</Text>
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -389,13 +401,34 @@ const styles = StyleSheet.create({
     borderColor: '#94a3b8',
   },
   axisRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 8,
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
   },
-  axisHint: { fontSize: 10, color: '#64748b', fontWeight: '600' },
+  legendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 14,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendSwatch: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15, 23, 42, 0.18)',
+  },
+  legendLabel: {
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '600',
+  },
 });
