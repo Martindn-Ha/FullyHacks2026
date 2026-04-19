@@ -71,7 +71,7 @@ const SYMPTOM_OPTIONS = [
 ] as const;
 
 const seafloorBackground = require('../../assets/seafloor.png');
-const magikarpGif = require('../../assets/magikarp.gif');
+const seaTurtlePng = require('../../assets/seaturtle.png');
 const bubblePng = require('../../assets/bubblr.png');
 
 const STORAGE_PHONE = '@tideTogether/smsPresetPhone';
@@ -430,7 +430,7 @@ export function ContactScreen() {
     >
       <StatusBar style="light" />
       <View pointerEvents="none" style={styles.gifDecorLayer} accessibilityElementsHidden>
-        <Image source={magikarpGif} style={styles.gifMagikarp} resizeMode="contain" />
+        <Image source={seaTurtlePng} style={styles.seaTurtleDecor} resizeMode="contain" />
       </View>
       <KeyboardAvoidingView
         style={styles.flex}
@@ -734,12 +734,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
   },
-  gifMagikarp: {
+  seaTurtleDecor: {
     position: 'absolute',
-    bottom: '15%',
+    bottom: '14%',
     left: 70,
-    width: 50,
-    height: 50,
+    width: 72,
+    height: 72,
     opacity: 0.82,
   },
   scroll: { flex: 1, backgroundColor: 'transparent' },
@@ -829,7 +829,7 @@ const styles = StyleSheet.create({
   /** Negative margin nudges the bubble upward vs true vertical center of `sendCircleArea`. */
   sendBubbleOuter: {
     alignItems: 'center',
-    marginTop: -100,
+    marginTop: -150,
   },
   sendBubblePress: {
     alignItems: 'center',
