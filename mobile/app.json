@@ -16,6 +16,7 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Location is used to find nearby restaurants and grocery-style options.",
+        "NSUserNotificationsUsageDescription": "Notifications alert you when the glucose model predicts a spike, after recommendations are available.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
@@ -35,6 +36,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "expo-notifications",
       [
         "expo-location",
         {
