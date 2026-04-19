@@ -2,13 +2,17 @@ import type { FoodRecommendation, PlaceCandidate, Severity } from '../types.js';
 import type { PlaceGuidanceRow } from './humanDeltaClient.js';
 import { IntegrationError } from './integrationError.js';
 
-function pickSuggestedItem(passageText: string, placeName: string): string {
-  const t = passageText.toLowerCase();
-  if (t.includes('bowl')) return 'Protein-forward bowl with extra vegetables (sauce on the side)';
-  if (t.includes('salad')) return 'Large salad with grilled protein and dressing on the side';
-  if (t.includes('grilled')) return 'Grilled protein plate with a non-starchy side';
-  if (t.includes('soup')) return 'Broth-based soup with a side salad';
-  return `A simpler plate at ${placeName} focused on protein and vegetables`;
+/** When Gemini did not return llmPresentation: anchor the pick line to retrieved text, not invented menu patterns. */
+function pickSuggestedItemFromPassages(passageText: string, placeName: string): string {
+  const first =
+    passageText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? passageText.trim();
+  if (first.length > 0) {
+    return first.slice(0, 140).trim() + (first.length > 140 ? '…' : '');
+  }
+  return `No indexed menu text for ${placeName}`;
 }
 
 function scoreOption(params: {
@@ -59,7 +63,8 @@ export function rankFoodRecommendations(params: {
     }
     const passageText = g.passages.map((p) => p.text).join(' ').trim();
     const primary = g.passages[0].text;
-    const suggestedItem = g.llmPresentation?.suggestedItem ?? pickSuggestedItem(primary, place.name);
+    const suggestedItem =
+      g.llmPresentation?.suggestedItem ?? pickSuggestedItemFromPassages(passageText, place.name);
     const src = g.passages[0].source;
     const passageTextForScore =
       [
@@ -91,5 +96,11 @@ export function rankFoodRecommendations(params: {
     });
   }
 
-  return candidates.sort((a, b) => b.score - a.score).slice(0, 3);
+  return candidates
+    .sort((a, b) => {
+      const d = a.place.distanceM - b.place.distanceM;
+      if (d !== 0) return d;
+      return b.score - a.score;
+    })
+    .slice(0, 3);
 }
