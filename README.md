@@ -1,8 +1,12 @@
 # FullyHacks 2026 — Tide Together (Expo + Express)
 
-Hackathon demo: CGM-style context, **spike risk**, **nearby food** via Google Places (New), optional **Human Delta** retrieval + **Gemini** for meal copy and **SMS check-in** narratives. **Not medical advice.**
+## Purpose
 
-More product context: `hackathon_diabetes_app_human_delta_brief.txt`.
+**Tide Together** is a **FullyHacks 2026** project built to explore how software can support day-to-day **glucose self-management** in a practical, demo-friendly way. The goal is to help someone who may be heading toward a **post-meal spike** make a **better nearby food choice** with clear, grounded explanations—and to **loop in a trusted contact** when the person wants to share how they are doing (including optional symptoms) via **SMS**.
+
+The app keeps **prediction, safety rules, ranking, and escalation** on our side. **Human Delta** acts as a **retrieval layer** (menus, nutrition snippets, indexed education pages) so suggestions and narratives can reference real content instead of generic guesses. **Gemini** helps turn that material into readable meal guidance and check-in messages. Nothing here replaces a care team or professional advice; it is a **hackathon prototype**, not a medical product.
+
+Deeper product and integration notes: `hackathon_diabetes_app_human_delta_brief.txt`.
 
 ## Layout
 
@@ -10,6 +14,18 @@ More product context: `hackathon_diabetes_app_human_delta_brief.txt`.
 |-----------|---------|
 | `mobile/` | Expo app — UI, SMS preset, calls backend |
 | `backend/` | Express API — Places, Human Delta, Gemini, rules |
+
+## Tech stack
+
+| Area | What we use |
+|------|----------------|
+| **Mobile** | [Expo](https://expo.dev/) (React Native), **TypeScript**, React Navigation, AsyncStorage; Expo modules (e.g. Location, SMS, Notifications) |
+| **Backend** | **Node.js**, **Express**, **TypeScript** (dev: `tsx`); orchestrates risk rules, Places, Human Delta, Gemini |
+| **Maps** | **Google Places API (New)** — nearby search from the server |
+| **Retrieval** | **Human Delta** — `POST /v1/search` for indexed menus / web / docs (optional) |
+| **LLM** | **Google Gemini** — Vertex AI (default in `.env.example`) or Google AI Studio (`GEMINI_USE_VERTEX=false`) for meal synthesis and SMS check-in copy |
+| **ML (optional)** | **Python** + `ml_model/` — spike regression when env points at the infer script (see `backend/.env.example`) |
+| **Dev / network** | **npm**; optional **[Cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) quick tunnels** (`cloudflared` via `npx`) so phones reach Metro and the API on restrictive Wi‑Fi |
 
 ## Requirements
 
