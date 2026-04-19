@@ -14,6 +14,7 @@ import {
   tryReadClarityDemoCsv,
   type ClarityDemoDataset,
 } from '../services/clarityDemoCsv.js';
+import { runSpikeModelInference } from '../services/spikeModelInference.js';
 
 export const apiRouter = express.Router();
 
@@ -82,6 +83,41 @@ apiRouter.get('/clarity-demo', (req, res) => {
       .send(`No demo CSV for dataset=${dataset} in dummydata/ (expected file for this mode).`);
   }
   res.type('text/csv; charset=utf-8').send(raw);
+});
+
+/**
+ * ML spike risk from `spike_model_app` (LightGBM). Body: `{ "points": [ { "t": ms, "mgdl": number }, ... ] }`.
+ * Requires Python + `pip install -r spike_model_app/requirements-inference.txt` on the machine running the API.
+ */
+apiRouter.post('/spike-risk', (req, res) => {
+  const raw = req.body as { points?: unknown };
+  const points = raw?.points;
+  if (!Array.isArray(points)) {
+    return res.status(400).json({ ready: false, error: 'points_must_be_array' });
+  }
+  if (points.length > 8000) {
+    return res.status(400).json({ ready: false, error: 'too_many_points' });
+  }
+  const normalized: { t: number; mgdl: number }[] = [];
+  for (const p of points) {
+    if (!p || typeof p !== 'object') continue;
+    const o = p as { t?: unknown; mgdl?: unknown };
+    const t = Number(o.t);
+    const mgdl = Number(o.mgdl);
+    if (!Number.isFinite(t) || !Number.isFinite(mgdl) || mgdl <= 0) continue;
+    normalized.push({ t, mgdl });
+  }
+  if (normalized.length === 0) {
+    return res.status(400).json({ ready: false, error: 'no_valid_points' });
+  }
+  try {
+    const out = runSpikeModelInference(normalized);
+    return res.json(out);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    console.error('[api /spike-risk]', message);
+    return res.status(500).json({ ready: false, error: 'server', message });
+  }
 });
 
 apiRouter.post('/risk-assessment', (req, res) => {

@@ -9,6 +9,15 @@ import { useCgmSession } from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
 
+/** Less time across the plot width ⇒ more horizontal zoom (30‑min ML band looks wider). */
+const CHART_VISIBLE_HOUR_PRESETS = [
+  { label: '1h', hours: 1 },
+  { label: '1.5h', hours: 1.5 },
+  { label: '2h', hours: 2 },
+  { label: '4h', hours: 4 },
+  { label: '8h', hours: 8 },
+] as const;
+
 export function HomeScreen() {
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -22,6 +31,11 @@ export function HomeScreen() {
     playbackT,
     displayMgdl,
     trend,
+    mlSpikeReady,
+    mlSpikeProbability,
+    mlSpikeThresholdMgDl,
+    mlSpikeHorizonMinutes,
+    mlSpikeNote,
   } = useCgmSession();
 
   /** Scroll horizontal padding (14×2) + card padding (12×2). */
@@ -38,6 +52,7 @@ export function HomeScreen() {
   }, [winH, insets.top, insets.bottom, tabBarHeight]);
 
   const [showChartSettings, setShowChartSettings] = useState(false);
+  const [chartVisibleHours, setChartVisibleHours] = useState(4);
 
   /** Green band matches demo cohort: diabetic CSV → 70–180; non-diabetic export → 70–140. */
   const targetBandHigh = demoGlucoseDataset === 'diabetic' ? 180 : 140;
@@ -86,6 +101,13 @@ export function HomeScreen() {
               targetBandLow={70}
               targetBandHigh={targetBandHigh}
               demoGlucoseDataset={demoGlucoseDataset}
+              mlSpikeBand={{
+                horizonMinutes: mlSpikeHorizonMinutes ?? 30,
+                thresholdMgDl: mlSpikeThresholdMgDl ?? 180,
+                probability: mlSpikeReady && mlSpikeProbability !== null ? mlSpikeProbability : null,
+                ready: mlSpikeReady,
+              }}
+              visibleRangeHours={chartVisibleHours}
             />
           ) : (
             <View style={[styles.graphPlaceholder, { width: chartW, minHeight: chartH }]}>
@@ -99,6 +121,14 @@ export function HomeScreen() {
             </View>
             <Text style={styles.cgmClockCompact} numberOfLines={2}>
               {clockLabel}
+            </Text>
+          </View>
+          <View style={styles.spikeRow}>
+            <Text style={styles.spikeLabel}>ML spike risk (forward window)</Text>
+            <Text style={styles.spikeValue} numberOfLines={6}>
+              {mlSpikeReady && mlSpikeProbability !== null
+                ? `${Math.round(mlSpikeProbability * 100)}% chance of any CGM above ${mlSpikeThresholdMgDl ?? '—'} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min.\nShaded band on the graph = that time window (not a predicted glucose curve).\nThe model learns from future samples strictly above that level, not “≥ right now”; already-high-but-flat glucose can score low. On the 180 mg/dL demo band the dolphin uses >180 at the playhead so it matches that spike edge.`
+                : (mlSpikeNote ?? '…')}
             </Text>
           </View>
         </View>
@@ -134,6 +164,25 @@ export function HomeScreen() {
               >
                 <Text style={styles.speedFineBtnText}>Faster +</Text>
               </Pressable>
+            </View>
+
+            <Text style={styles.speedLabel}>Chart zoom (time across graph width)</Text>
+            <Text style={styles.zoomHint}>
+              Smaller = zoom in — the ML 30‑min band uses more of the chart. Does not change playback speed.
+            </Text>
+            <View style={styles.speedPresets}>
+              {CHART_VISIBLE_HOUR_PRESETS.map((p) => {
+                const on = chartVisibleHours === p.hours;
+                return (
+                  <Pressable
+                    key={p.label}
+                    onPress={() => setChartVisibleHours(p.hours)}
+                    style={[styles.speedChip, on && styles.speedChipOn]}
+                  >
+                    <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
             <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
@@ -221,7 +270,25 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   cgmClockCompact: { fontSize: 12, fontWeight: '700', color: '#64748b', textAlign: 'right', maxWidth: '42%' },
+  spikeRow: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5eaf3',
+    gap: 4,
+  },
+  spikeLabel: { fontSize: 11, fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 },
+  spikeValue: { fontSize: 13, fontWeight: '700', color: '#0b1f3a', lineHeight: 18 },
   cgmLoading: { fontSize: 14, color: '#5c6b82', fontWeight: '600' },
+  zoomHint: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    marginTop: -2,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+    lineHeight: 15,
+  },
   speedLabel: { marginTop: 12, fontSize: 13, fontWeight: '700', color: '#000000' },
   speedPresets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   speedChip: {

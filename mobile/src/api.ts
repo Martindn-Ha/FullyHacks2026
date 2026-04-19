@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import type { GlucosePoint } from './clarity/parseClarityExport';
 
 const baseUrl =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
@@ -10,6 +11,54 @@ export function getApiBaseUrl(): string {
 }
 
 export type ClarityDemoDataset = 'nondiabetic' | 'diabetic';
+
+export type SpikeRiskResponse = {
+  ready: boolean;
+  spikeProbability?: number | null;
+  thresholdMgDl?: number;
+  horizonMinutes?: number;
+  nPointsUsed?: number;
+  error?: string;
+  reason?: string;
+  message?: string;
+};
+
+const SPIKE_TIMEOUT_MS = 30_000;
+
+/** Calls backend `/api/spike-risk` (Python LightGBM bundle on the server). */
+export async function fetchSpikeRisk(
+  points: Pick<GlucosePoint, 't' | 'mgdl'>[],
+  outerSignal?: AbortSignal,
+): Promise<SpikeRiskResponse> {
+  const url = `${baseUrl.replace(/\/$/, '')}/api/spike-risk`;
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), SPIKE_TIMEOUT_MS);
+  if (outerSignal) {
+    if (outerSignal.aborted) ctrl.abort();
+    else outerSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ points }),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    let data: SpikeRiskResponse;
+    try {
+      data = JSON.parse(text) as SpikeRiskResponse;
+    } catch {
+      throw new Error(text.slice(0, 200) || `Spike risk failed (${res.status})`);
+    }
+    if (!res.ok) {
+      throw new Error(data.message || data.error || `Spike risk failed (${res.status})`);
+    }
+    return data;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 /** Optional: raw Clarity / Stelo CSV from backend `dummydata/` for the CGM-style graph. */
 export async function fetchClarityDemoCsv(dataset: ClarityDemoDataset = 'nondiabetic'): Promise<string | null> {
