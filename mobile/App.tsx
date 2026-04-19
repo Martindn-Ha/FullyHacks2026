@@ -1,14 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { CgmSessionProvider } from './src/context/CgmSessionContext';
 import { EventsScreen } from './src/screens/EventsScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { RecommendationsScreen } from './src/screens/RecommendationsScreen';
 
 const Tab = createBottomTabNavigator();
 
 export default function App() {
   return (
     <NavigationContainer>
+      <CgmSessionProvider>
       <Tab.Navigator
         screenOptions={{
           headerShown: false,
@@ -31,6 +34,14 @@ export default function App() {
           }}
         />
         <Tab.Screen
+          name="Recommendations"
+          component={RecommendationsScreen}
+          options={{
+            tabBarLabel: 'Recommendations',
+            tabBarIcon: ({ color, size }) => <Ionicons name="restaurant-outline" size={size} color={color} />,
+          }}
+        />
+        <Tab.Screen
           name="Events"
           component={EventsScreen}
           options={{
@@ -39,6 +50,7 @@ export default function App() {
           }}
         />
       </Tab.Navigator>
+      </CgmSessionProvider>
     </NavigationContainer>
   );
 }

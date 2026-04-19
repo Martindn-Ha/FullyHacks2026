@@ -1,0 +1,16 @@
+{
+  "feature_cols": [
+    "glucose_mg_dl",
+    "mean_60",
+    "std_60",
+    "min_60",
+    "max_60",
+    "glucose_lag_15",
+    "slope_15",
+    "tod_sin",
+    "tod_cos"
+  ],
+  "spike_threshold_mg_dl": 180.0,
+  "horizon_minutes": 30,
+  "sklearn_class": "LGBMClassifier"
+}
