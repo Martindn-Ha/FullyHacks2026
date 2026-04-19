@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SMS from 'expo-sms';
+import type { SMSResponse } from 'expo-sms';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,6 +28,47 @@ const DEBUG_STICKY_POPBUBBLE_SVG = false;
 
 /** After MFMessageCompose returns, iOS still animates the sheet away — hold pop art through that fade. */
 const IOS_SMS_DISMISS_HOLD_MS = 450;
+
+/**
+ * Android: brief delay after closing the symptom sheet before `SMS.sendSMSAsync` so layout settles.
+ * iOS: prefer `Modal.onDismiss` instead of this timeout — the native modal can still be on-screen for
+ * hundreds of ms after `visible={false}`; presenting MFMessageCompose too early hangs the UI.
+ */
+const SMS_AFTER_MODAL_MS = 320;
+
+/** `SMS.isAvailableAsync()` can hang on some builds; do not leave the UI spinning with no feedback. */
+const SMS_IS_AVAILABLE_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(id);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(id);
+        reject(e);
+      },
+    );
+  });
+}
+
+/** AsyncStorage should be instant; if the bridge stalls, still show the screen. */
+const HYDRATE_STORAGE_SAFETY_MS = 4000;
+
+const SYMPTOM_OPTIONS = [
+  'Shaky / sweating',
+  'Nausea',
+  'Headache',
+  'Dizziness',
+  'Very thirsty',
+  'Confusion / brain fog',
+  'Fatigue',
+  'Stomach pain',
+  'Short of breath',
+] as const;
 
 const seafloorBackground = require('../../assets/seafloor.png');
 const magikarpGif = require('../../assets/magikarp.gif');
@@ -79,6 +121,29 @@ function normalizePhoneForSms(raw: string): string {
   return trimmed;
 }
 
+/**
+ * iOS native ExpoSMS allows only one MFMessageCompose at a time; overlapping `sendSMSAsync` rejects with
+ * "SMS sending in progress…". Chain calls so each send waits for the previous composer to finish.
+ */
+let smsNativeSendTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * One native composer at a time. Each call waits for the previous `sendSMSAsync` promise to settle (success,
+ * cancel, error, or reject). Do not wrap the native call in a shorter `Promise.race` timeout — that can reject while
+ * iOS still holds the composer open, which either deadlocks the queue (if you then `await` the native promise
+ * forever) or surfaces “SMS sending in progress” on the next attempt.
+ */
+function enqueueSendSMSAsync(addresses: string[], message: string): Promise<SMSResponse> {
+  const op: Promise<SMSResponse> = smsNativeSendTail.catch(() => {}).then(() =>
+    SMS.sendSMSAsync(addresses, message),
+  );
+  smsNativeSendTail = op.then(
+    () => undefined,
+    () => undefined,
+  );
+  return op;
+}
+
 export function ContactScreen() {
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
@@ -94,16 +159,49 @@ export function ContactScreen() {
   const [postIosSmsPop, setPostIosSmsPop] = useState(false);
   const postIosSmsPopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [symptomPickerOpen, setSymptomPickerOpen] = useState(false);
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+  const selectedSymptomsRef = useRef<string[]>([]);
+  /** Prevents double Done / Cancel while the symptom sheet is closing. */
+  const symptomSheetActionRef = useRef(false);
+  const smsAfterModalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSmsSymptomsRef = useRef<string[] | null>(null);
+  /** iOS: which follow-up to run in `Modal.onDismiss` after the symptom sheet fully unmounts. */
+  const symptomPickerCloseKindRef = useRef<'sms' | 'cancel' | null>(null);
+
+  const [smsWarmupAfterPicker, setSmsWarmupAfterPicker] = useState(false);
+
+  useEffect(() => {
+    selectedSymptomsRef.current = selectedSymptoms;
+  }, [selectedSymptoms]);
+
   useEffect(() => {
     return () => {
       if (postIosSmsPopTimerRef.current) {
         clearTimeout(postIosSmsPopTimerRef.current);
       }
+      if (smsAfterModalTimeoutRef.current) {
+        clearTimeout(smsAfterModalTimeoutRef.current);
+        smsAfterModalTimeoutRef.current = null;
+      }
+      setSmsWarmupAfterPicker(false);
     };
+  }, []);
+
+  const clearPendingSmsAfterModal = useCallback(() => {
+    if (smsAfterModalTimeoutRef.current) {
+      clearTimeout(smsAfterModalTimeoutRef.current);
+      smsAfterModalTimeoutRef.current = null;
+    }
+    pendingSmsSymptomsRef.current = null;
+    setSmsWarmupAfterPicker(false);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const safety = setTimeout(() => {
+      if (!cancelled) setHydrated(true);
+    }, HYDRATE_STORAGE_SAFETY_MS);
     (async () => {
       try {
         const [p, t, l] = await Promise.all([
@@ -118,11 +216,13 @@ export function ContactScreen() {
       } catch {
         /* ignore */
       } finally {
+        clearTimeout(safety);
         if (!cancelled) setHydrated(true);
       }
     })();
     return () => {
       cancelled = true;
+      clearTimeout(safety);
     };
   }, []);
 
@@ -142,7 +242,8 @@ export function ContactScreen() {
     }
   }, [presetPhone, messageTemplate, presetLabel]);
 
-  const sendAutomatedText = useCallback(async () => {
+  const sendAutomatedText = useCallback(
+    async (extraSymptoms: string[] = []) => {
     const to = normalizePhoneForSms(presetPhone);
     if (!to || to.replace(/\D/g, '').length < 10) {
       Alert.alert(
@@ -161,7 +262,7 @@ export function ContactScreen() {
     const coordinates = coordsOk ? `${latStr}, ${lngStr}` : 'unavailable';
     const nameStr = presetLabel.trim() || 'not set';
 
-    const body = applyTemplate(tpl, {
+    let body = applyTemplate(tpl, {
       name: nameStr,
       glucose: String(Math.round(displayMgdl)),
       trend: trend || '—',
@@ -170,10 +271,19 @@ export function ContactScreen() {
       lng: lngStr,
       coordinates,
     });
+    const trimmed = extraSymptoms.map((s) => s.trim()).filter(Boolean);
+    if (trimmed.length > 0) {
+      body +=
+        '\n\n---\nAdditional context (symptoms selected):\n' + trimmed.map((s) => `• ${s}`).join('\n');
+    }
 
     let openedComposer = false;
     try {
-      const available = await SMS.isAvailableAsync();
+      const available = await withTimeout(
+        SMS.isAvailableAsync(),
+        SMS_IS_AVAILABLE_TIMEOUT_MS,
+        'SMS availability check timed out. Try again, or restart the app if this keeps happening.',
+      );
       if (!available) {
         Alert.alert(
           'SMS not available',
@@ -191,7 +301,18 @@ export function ContactScreen() {
       setPostIosSmsPop(false);
       setSending(true);
       openedComposer = true;
-      const { result } = await SMS.sendSMSAsync([to], body);
+      let result: SMSResponse['result'];
+      try {
+        ({ result } = await enqueueSendSMSAsync([to], body));
+      } catch (first) {
+        const m = first instanceof Error ? first.message : String(first);
+        if (/sending in progress|in progress/i.test(m)) {
+          await new Promise((r) => setTimeout(r, 600));
+          ({ result } = await enqueueSendSMSAsync([to], body));
+        } else {
+          throw first;
+        }
+      }
       if (result === 'cancelled') {
         Alert.alert('Cancelled', 'Message was not sent.');
       } else if (result === 'sent' || result === 'unknown') {
@@ -219,7 +340,79 @@ export function ContactScreen() {
         setPostIosSmsPop(false);
       }
     }
-  }, [presetPhone, messageTemplate, presetLabel, displayMgdl, trend, lat, lng]);
+  },
+    [presetPhone, messageTemplate, presetLabel, displayMgdl, trend, lat, lng],
+  );
+
+  const handleSymptomPickerDismissed = useCallback(() => {
+    const kind = symptomPickerCloseKindRef.current;
+    symptomPickerCloseKindRef.current = null;
+    if (kind === 'sms') {
+      const payload = pendingSmsSymptomsRef.current;
+      pendingSmsSymptomsRef.current = null;
+      void (async () => {
+        try {
+          if (payload != null) {
+            await sendAutomatedText(payload);
+          }
+        } finally {
+          setSmsWarmupAfterPicker(false);
+          symptomSheetActionRef.current = false;
+        }
+      })();
+    } else if (kind === 'cancel') {
+      symptomSheetActionRef.current = false;
+    }
+    /* kind === null: no-op — do not clear `symptomSheetActionRef` here; the `'sms'` path clears it in `finally`. */
+  }, [sendAutomatedText]);
+
+  const commitSymptomsAndSend = useCallback(() => {
+    if (symptomSheetActionRef.current) return;
+    symptomSheetActionRef.current = true;
+    const symptoms = [...selectedSymptomsRef.current];
+    clearPendingSmsAfterModal();
+    pendingSmsSymptomsRef.current = symptoms;
+    symptomPickerCloseKindRef.current = 'sms';
+    setSmsWarmupAfterPicker(true);
+    setSymptomPickerOpen(false);
+    if (Platform.OS === 'android') {
+      smsAfterModalTimeoutRef.current = setTimeout(() => {
+        smsAfterModalTimeoutRef.current = null;
+        handleSymptomPickerDismissed();
+      }, SMS_AFTER_MODAL_MS);
+    }
+  }, [clearPendingSmsAfterModal, handleSymptomPickerDismissed]);
+
+  const cancelSymptomPicker = useCallback(() => {
+    if (symptomSheetActionRef.current) return;
+    symptomSheetActionRef.current = true;
+    clearPendingSmsAfterModal();
+    if (Platform.OS === 'ios') {
+      symptomPickerCloseKindRef.current = 'cancel';
+    }
+    setSymptomPickerOpen(false);
+  }, [clearPendingSmsAfterModal]);
+
+  const openSymptomPicker = useCallback(() => {
+    const to = normalizePhoneForSms(presetPhone);
+    if (!to || to.replace(/\D/g, '').length < 10) {
+      Alert.alert(
+        'Phone number',
+        'Open Demo settings (top right), enter a valid number, and tap Save preset.',
+      );
+      return;
+    }
+    symptomSheetActionRef.current = false;
+    setSelectedSymptoms([]);
+    selectedSymptomsRef.current = [];
+    symptomPickerCloseKindRef.current = null;
+    clearPendingSmsAfterModal();
+    setSymptomPickerOpen(true);
+  }, [presetPhone, clearPendingSmsAfterModal]);
+
+  const toggleSymptom = useCallback((label: string) => {
+    setSelectedSymptoms((prev) => (prev.includes(label) ? prev.filter((x) => x !== label) : [...prev, label]));
+  }, []);
 
   const presetSummary =
     presetPhone.trim().length > 0
@@ -268,7 +461,8 @@ export function ContactScreen() {
           <Text style={styles.subtitle}>Preset SMS alert</Text>
 
           <Text style={styles.hint}>
-            Send opens Messages with your template filled in — iOS/Android do not allow silent SMS from apps.
+            Tap the bubble to optionally add symptoms, then tap Done on that sheet. Messages opens with your filled-in
+            template so you can review and tap Send. Apps cannot send SMS in the background.
           </Text>
 
           {!hydrated ? (
@@ -287,19 +481,25 @@ export function ContactScreen() {
               >
                 <View style={styles.sendBubbleOuter}>
                   <Pressable
-                    onPress={() => void sendAutomatedText()}
-                    disabled={sending || postIosSmsPop}
+                    onPress={openSymptomPicker}
+                    disabled={sending || postIosSmsPop || symptomPickerOpen || smsWarmupAfterPicker}
                     style={({ pressed }) => [
                       styles.sendBubblePress,
                       pressed && styles.btnPressed,
-                      (sending || postIosSmsPop) && styles.btnDisabled,
+                      (sending || postIosSmsPop || symptomPickerOpen || smsWarmupAfterPicker) &&
+                        styles.btnDisabled,
                     ]}
                     accessibilityRole="button"
                     accessibilityLabel="Send alert SMS"
                   >
                     {({ pressed }) => (
                       <View style={[styles.sendBubbleFrame, { width: bubbleW, height: bubbleH }]}>
-                        {DEBUG_STICKY_POPBUBBLE_SVG || pressed || sending || postIosSmsPop ? (
+                        {DEBUG_STICKY_POPBUBBLE_SVG ||
+                        pressed ||
+                        sending ||
+                        postIosSmsPop ||
+                        symptomPickerOpen ||
+                        smsWarmupAfterPicker ? (
                           <PopBubbleSvg
                             width={bubbleW}
                             height={bubbleH}
@@ -317,8 +517,10 @@ export function ContactScreen() {
                           />
                         )}
                         <View style={styles.sendBubbleTextShell} pointerEvents="none">
-                          {sending ? (
+                          {sending || smsWarmupAfterPicker ? (
                             <ActivityIndicator color="#0e7490" size="large" />
+                          ) : symptomPickerOpen ? (
+                            <Text style={styles.sendBubbleText}>Add context…</Text>
                           ) : (
                             <Text style={styles.sendBubbleText}>
                               Send alert{'\n'}SMS
@@ -451,6 +653,75 @@ export function ContactScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={symptomPickerOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={cancelSymptomPicker}
+        onDismiss={Platform.OS === 'ios' ? handleSymptomPickerDismissed : undefined}
+      >
+        <View style={[styles.symptomModalRoot, { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={cancelSymptomPicker}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel and close symptom picker"
+          />
+          <View style={styles.symptomSheet}>
+            <Text style={styles.symptomSheetTitle}>Add context?</Text>
+            <Text style={styles.symptomSheetSubtitle}>
+              Tap any symptoms that apply, then tap Done. The Messages sheet opens next so you can review and tap Send.
+            </Text>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={styles.symptomChipScroll}
+              contentContainerStyle={styles.symptomChipScrollContent}
+            >
+              <View style={styles.symptomChipWrap}>
+                {SYMPTOM_OPTIONS.map((label) => {
+                  const on = selectedSymptoms.includes(label);
+                  return (
+                    <Pressable
+                      key={label}
+                      onPress={() => toggleSymptom(label)}
+                      style={({ pressed }) => [
+                        styles.symptomChip,
+                        on && styles.symptomChipOn,
+                        pressed && styles.symptomChipPressed,
+                      ]}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: on }}
+                      accessibilityLabel={label}
+                    >
+                      <Text style={[styles.symptomChipText, on && styles.symptomChipTextOn]}>{label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </ScrollView>
+            <View style={styles.symptomActions}>
+              <Pressable
+                onPress={cancelSymptomPicker}
+                style={({ pressed }) => [styles.symptomSecondaryBtn, pressed && styles.symptomSecondaryBtnPressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel send"
+              >
+                <Text style={styles.symptomSecondaryBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={commitSymptomsAndSend}
+                style={({ pressed }) => [styles.symptomPrimaryBtn, pressed && styles.symptomPrimaryBtnPressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Done and open Messages"
+              >
+                <Text style={styles.symptomPrimaryBtnText}>Done</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
     </ImageBackground>
   );
@@ -745,4 +1016,83 @@ const styles = StyleSheet.create({
   },
   modalDoneBtnPressed: { opacity: 0.9 },
   modalDoneText: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  symptomModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  symptomSheet: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+    maxHeight: '86%',
+  },
+  symptomSheetTitle: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#020617',
+    letterSpacing: -0.3,
+  },
+  symptomSheetSubtitle: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 19,
+  },
+  symptomChipScroll: { marginTop: 16, maxHeight: 280 },
+  symptomChipScrollContent: { paddingBottom: 8 },
+  symptomChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  symptomChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  symptomChipOn: {
+    backgroundColor: '#cffafe',
+    borderColor: '#22d3ee',
+  },
+  symptomChipPressed: { opacity: 0.88 },
+  symptomChipText: { fontSize: 14, fontWeight: '700', color: '#334155' },
+  symptomChipTextOn: { color: '#0e7490' },
+  symptomActions: {
+    marginTop: 16,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'stretch',
+  },
+  symptomSecondaryBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  symptomSecondaryBtnPressed: { opacity: 0.9 },
+  symptomSecondaryBtnText: { fontSize: 15, fontWeight: '800', color: '#475569' },
+  symptomPrimaryBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: '#0ea5e9',
+  },
+  symptomPrimaryBtnPressed: { opacity: 0.92 },
+  symptomPrimaryBtnText: { fontSize: 15, fontWeight: '800', color: '#ffffff' },
 });
