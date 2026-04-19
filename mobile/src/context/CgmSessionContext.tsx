@@ -48,6 +48,8 @@ type CgmSessionContextValue = {
   glucosePoints: GlucosePoint[];
   demoGlucoseDataset: ClarityDemoDataset;
   setDemoGlucoseDataset: (d: ClarityDemoDataset) => void;
+  isPlaybackPaused: boolean;
+  setPlaybackPaused: (paused: boolean | ((p: boolean) => boolean)) => void;
   timeCompression: number;
   setTimeCompression: (c: number | ((p: number) => number)) => void;
   playbackT: number;
@@ -97,8 +99,10 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   }, [demoGlucoseDataset]);
 
   const [timeCompression, setTimeCompression] = useState(DEFAULT_TIME_COMPRESSION);
+  const [isPlaybackPaused, setPlaybackPaused] = useState(false);
   const { playbackT, displayMgdl, trend } = useSimulatedCgmPlayback(glucosePoints, {
     timeCompression,
+    playing: !isPlaybackPaused,
   });
 
   const [lat, setLat] = useState('33.8823');
@@ -398,6 +402,8 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         glucosePoints,
         demoGlucoseDataset,
         setDemoGlucoseDataset,
+        isPlaybackPaused,
+        setPlaybackPaused,
         timeCompression,
         setTimeCompression,
         playbackT,
@@ -423,6 +429,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
     [
       glucosePoints,
       demoGlucoseDataset,
+      isPlaybackPaused,
       timeCompression,
       playbackT,
       displayMgdl,
