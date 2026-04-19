@@ -9,6 +9,15 @@ import { useCgmSession } from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
 
+/** Less time across the plot width ⇒ more horizontal zoom (30‑min ML band looks wider). */
+const CHART_VISIBLE_HOUR_PRESETS = [
+  { label: '1h', hours: 1 },
+  { label: '1.5h', hours: 1.5 },
+  { label: '2h', hours: 2 },
+  { label: '4h', hours: 4 },
+  { label: '8h', hours: 8 },
+] as const;
+
 export function HomeScreen() {
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -22,6 +31,12 @@ export function HomeScreen() {
     playbackT,
     displayMgdl,
     trend,
+    mlSpikeReady,
+    mlSpikeProbability,
+    mlPredictedMaxMgDl,
+    mlSpikeThresholdMgDl,
+    mlSpikeHorizonMinutes,
+    mlSpikeNote,
   } = useCgmSession();
 
   /** Scroll horizontal padding (14×2) + card padding (12×2). */
@@ -38,6 +53,8 @@ export function HomeScreen() {
   }, [winH, insets.top, insets.bottom, tabBarHeight]);
 
   const [showChartSettings, setShowChartSettings] = useState(false);
+  const [chartVisibleHours, setChartVisibleHours] = useState(4);
+  const [showFutureOrangeTrace, setShowFutureOrangeTrace] = useState(true);
 
   /** Green band matches demo cohort: diabetic CSV → 70–180; non-diabetic export → 70–140. */
   const targetBandHigh = demoGlucoseDataset === 'diabetic' ? 180 : 140;
@@ -78,15 +95,37 @@ export function HomeScreen() {
 
         <View style={styles.cgmCard}>
           {glucosePoints.length >= 8 ? (
-            <GlucoseStripChart
-              points={glucosePoints}
-              playbackT={playbackT}
-              width={chartW}
-              height={chartH}
-              targetBandLow={70}
-              targetBandHigh={targetBandHigh}
-              demoGlucoseDataset={demoGlucoseDataset}
-            />
+            <>
+              <GlucoseStripChart
+                points={glucosePoints}
+                playbackT={playbackT}
+                width={chartW}
+                height={chartH}
+                targetBandLow={70}
+                targetBandHigh={targetBandHigh}
+                demoGlucoseDataset={demoGlucoseDataset}
+                mlForecast={{
+                  horizonMinutes: mlSpikeHorizonMinutes ?? 30,
+                  thresholdMgDl: mlSpikeThresholdMgDl ?? 180,
+                  predictedMaxMgDl:
+                    mlSpikeReady && mlPredictedMaxMgDl !== null ? mlPredictedMaxMgDl : null,
+                  ready: mlSpikeReady,
+                }}
+                visibleRangeHours={chartVisibleHours}
+                showFutureOrangeTrace={showFutureOrangeTrace}
+              />
+              <View style={styles.orangeTraceToggleRow}>
+                <Pressable
+                  onPress={() => setShowFutureOrangeTrace((s) => !s)}
+                  style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
+                  hitSlop={6}
+                >
+                  <Text style={styles.orangeTraceToggleText}>
+                    {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
           ) : (
             <View style={[styles.graphPlaceholder, { width: chartW, minHeight: chartH }]}>
               <Text style={styles.cgmLoading}>Preparing graph…</Text>
@@ -100,6 +139,28 @@ export function HomeScreen() {
             <Text style={styles.cgmClockCompact} numberOfLines={2}>
               {clockLabel}
             </Text>
+          </View>
+          <View style={styles.spikeRow}>
+            {mlSpikeReady &&
+            mlPredictedMaxMgDl !== null &&
+            typeof mlPredictedMaxMgDl === 'number' &&
+            Number.isFinite(mlPredictedMaxMgDl) ? (
+              <>
+                <Text style={styles.spikePredictedValue}>
+                  ≈ {Math.round(mlPredictedMaxMgDl)} mg/dL
+                </Text>
+                <Text style={styles.spikePredictedDetail} numberOfLines={1}>
+                  Peak predicted in next {mlSpikeHorizonMinutes ?? '—'} min (5‑min grid).
+                </Text>
+              </>
+            ) : mlSpikeReady && mlSpikeProbability !== null && Number.isFinite(mlSpikeProbability) ? (
+              <Text style={styles.spikeValue}>
+                Heat {Math.round(mlSpikeProbability * 100)}% · next {mlSpikeHorizonMinutes ?? '—'} min · threshold{' '}
+                {mlSpikeThresholdMgDl ?? '—'} mg/dL
+              </Text>
+            ) : (
+              <Text style={styles.spikeValue}>{mlSpikeNote ?? 'Forecast unavailable.'}</Text>
+            )}
           </View>
         </View>
 
@@ -134,6 +195,25 @@ export function HomeScreen() {
               >
                 <Text style={styles.speedFineBtnText}>Faster +</Text>
               </Pressable>
+            </View>
+
+            <Text style={styles.speedLabel}>Chart zoom (time across graph width)</Text>
+            <Text style={styles.zoomHint}>
+              Smaller = zoom in — the ML 30‑min band uses more of the chart. Does not change playback speed.
+            </Text>
+            <View style={styles.speedPresets}>
+              {CHART_VISIBLE_HOUR_PRESETS.map((p) => {
+                const on = chartVisibleHours === p.hours;
+                return (
+                  <Pressable
+                    key={p.label}
+                    onPress={() => setChartVisibleHours(p.hours)}
+                    style={[styles.speedChip, on && styles.speedChipOn]}
+                  >
+                    <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
             <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
@@ -203,6 +283,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
     borderRadius: 12,
   },
+  orangeTraceToggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 2,
+    paddingTop: 2,
+    paddingBottom: 0,
+  },
+  orangeTraceToggleBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f1f5f9',
+  },
+  orangeTraceToggleBtnPressed: { opacity: 0.88 },
+  orangeTraceToggleText: { fontSize: 12, fontWeight: '700', color: '#334155' },
   cgmStatsBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -221,7 +318,36 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   cgmClockCompact: { fontSize: 12, fontWeight: '700', color: '#64748b', textAlign: 'right', maxWidth: '42%' },
+  spikeRow: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5eaf3',
+    gap: 4,
+  },
+  spikePredictedValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#0b1f3a',
+    letterSpacing: -0.5,
+  },
+  spikePredictedDetail: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 16,
+  },
+  spikeValue: { fontSize: 13, fontWeight: '700', color: '#0b1f3a', lineHeight: 18 },
   cgmLoading: { fontSize: 14, color: '#5c6b82', fontWeight: '600' },
+  zoomHint: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    marginTop: -2,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+    lineHeight: 15,
+  },
   speedLabel: { marginTop: 12, fontSize: 13, fontWeight: '700', color: '#000000' },
   speedPresets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   speedChip: {

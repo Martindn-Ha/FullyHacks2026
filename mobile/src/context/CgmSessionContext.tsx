@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { Alert, ScrollView } from 'react-native';
 import * as Location from 'expo-location';
-import { fetchClarityDemoCsv, fetchRecommendations, type ClarityDemoDataset } from '../api';
+import { fetchClarityDemoCsv, fetchRecommendations, fetchSpikeRisk, type ClarityDemoDataset } from '../api';
 import { buildSyntheticClarityCsv, parseClarityExportCsv, type GlucosePoint } from '../clarity/parseClarityExport';
 import { DEFAULT_TIME_COMPRESSION, useSimulatedCgmPlayback } from '../clarity/useSimulatedCgmPlayback';
 
@@ -33,6 +33,14 @@ type CgmSessionContextValue = {
   recommendationsScrollRef: RefObject<ScrollView | null>;
   useDeviceLocation: () => Promise<void>;
   requestRecommendations: () => Promise<void>;
+  /** ML model: Ridge regression on 5-minute features (`ml_model/`) via backend; band tint uses a 0–1 score vs threshold. */
+  mlSpikeReady: boolean;
+  mlSpikeProbability: number | null;
+  /** Predicted max glucose in the forward horizon (regression target), when the server returns it. */
+  mlPredictedMaxMgDl: number | null;
+  mlSpikeThresholdMgDl: number | null;
+  mlSpikeHorizonMinutes: number | null;
+  mlSpikeNote: string | null;
 };
 
 const CgmSessionContext = createContext<CgmSessionContextValue | null>(null);
@@ -65,7 +73,123 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const [lng, setLng] = useState('-117.8851');
   const [loading, setLoading] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
+  const [mlSpikeReady, setMlSpikeReady] = useState(false);
+  const [mlSpikeProbability, setMlSpikeProbability] = useState<number | null>(null);
+  const [mlPredictedMaxMgDl, setMlPredictedMaxMgDl] = useState<number | null>(null);
+  const [mlSpikeThresholdMgDl, setMlSpikeThresholdMgDl] = useState<number | null>(null);
+  const [mlSpikeHorizonMinutes, setMlSpikeHorizonMinutes] = useState<number | null>(null);
+  const [mlSpikeNote, setMlSpikeNote] = useState<string | null>(null);
   const recommendationsScrollRef = useRef<ScrollView>(null);
+
+  /** `playbackT` updates every frame during replay; do not put it in effect deps or the debounce never fires. */
+  const playbackTRef = useRef(playbackT);
+  const glucosePointsRef = useRef(glucosePoints);
+  const timeCompressionRef = useRef(timeCompression);
+  playbackTRef.current = playbackT;
+  glucosePointsRef.current = glucosePoints;
+  timeCompressionRef.current = timeCompression;
+
+  useEffect(() => {
+    if (glucosePoints.length < 30) {
+      setMlSpikeReady(false);
+      setMlSpikeProbability(null);
+      setMlPredictedMaxMgDl(null);
+      setMlSpikeThresholdMgDl(null);
+      setMlSpikeHorizonMinutes(null);
+      setMlSpikeNote('ML spike: need more CGM points in buffer.');
+      return;
+    }
+
+    setMlSpikeNote(null);
+
+    let cancelled = false;
+    let inFlight: AbortController | null = null;
+    /** Avoid overlapping `/spike-risk` calls — aborting each tick cancelled the prior request before Python finished (looked like “always 0%”). */
+    let spikeFetchBusy = false;
+
+    const tick = async () => {
+      if (cancelled || spikeFetchBusy) return;
+      spikeFetchBusy = true;
+      const ac = new AbortController();
+      inFlight = ac;
+      const signal = ac.signal;
+
+      const wallStart = Date.now();
+      const playbackAtRequest = playbackTRef.current;
+      const comp = timeCompressionRef.current;
+
+      const pts = glucosePointsRef.current;
+      const t = playbackAtRequest;
+      const slice = pts.filter((p) => p.t <= t).slice(-800);
+      if (slice.length < 30) {
+        spikeFetchBusy = false;
+        if (!signal.aborted && !cancelled) {
+          setMlSpikeReady(false);
+          setMlSpikeProbability(null);
+          setMlPredictedMaxMgDl(null);
+          setMlSpikeNote('ML spike: need more history up to the playhead.');
+        }
+        return;
+      }
+      try {
+        const r = await fetchSpikeRisk(slice, signal);
+        if (signal.aborted || cancelled) return;
+
+        const wallDt = Date.now() - wallStart;
+        const drift = Math.abs(playbackTRef.current - playbackAtRequest);
+        /** Allow batched rAF (drift can exceed `wallDt×comp`); still drop obviously stale responses after slow networks. */
+        const maxDrift = Math.min(wallDt * comp * 5 + 500_000, 50 * 60_000);
+        if (drift > maxDrift) {
+          return;
+        }
+
+        setMlSpikeThresholdMgDl(typeof r.thresholdMgDl === 'number' ? r.thresholdMgDl : null);
+        setMlSpikeHorizonMinutes(typeof r.horizonMinutes === 'number' ? r.horizonMinutes : null);
+        const pred =
+          typeof r.predictedMaxMgDl === 'number' && Number.isFinite(r.predictedMaxMgDl)
+            ? r.predictedMaxMgDl
+            : null;
+        if (r.ready && typeof r.spikeProbability === 'number' && Number.isFinite(r.spikeProbability)) {
+          setMlSpikeReady(true);
+          setMlSpikeProbability(r.spikeProbability);
+          setMlPredictedMaxMgDl(pred);
+          setMlSpikeNote(null);
+        } else {
+          setMlSpikeReady(false);
+          setMlSpikeProbability(null);
+          setMlPredictedMaxMgDl(null);
+          setMlSpikeNote(
+            r.reason === 'insufficient_history'
+              ? 'ML spike: not enough recent window (~90+ min of CGM).'
+              : r.error
+                ? `ML spike: ${r.error}${r.message ? ` (${r.message})` : ''}`
+                : 'ML spike unavailable.',
+          );
+        }
+      } catch {
+        if (!signal.aborted && !cancelled) {
+          setMlSpikeReady(false);
+          setMlSpikeProbability(null);
+          setMlPredictedMaxMgDl(null);
+          setMlSpikeNote('ML spike: API unreachable or timed out.');
+        }
+      } finally {
+        spikeFetchBusy = false;
+      }
+    };
+
+    void tick();
+    const pollMs = Math.max(
+      900,
+      Math.min(2500, Math.round(1_200_000 / Math.max(40, timeCompression))),
+    );
+    const id = setInterval(() => void tick(), pollMs);
+    return () => {
+      cancelled = true;
+      inFlight?.abort();
+      clearInterval(id);
+    };
+  }, [glucosePoints, timeCompression]);
 
   const useDeviceLocation = useCallback(async () => {
     const permission = await Location.requestForegroundPermissionsAsync();
@@ -157,6 +281,12 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         recommendationsScrollRef,
         useDeviceLocation,
         requestRecommendations,
+        mlSpikeReady,
+        mlSpikeProbability,
+        mlPredictedMaxMgDl,
+        mlSpikeThresholdMgDl,
+        mlSpikeHorizonMinutes,
+        mlSpikeNote,
       }) satisfies CgmSessionContextValue,
     [
       glucosePoints,
@@ -169,6 +299,12 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       lng,
       loading,
       resultText,
+      mlSpikeReady,
+      mlSpikeProbability,
+      mlPredictedMaxMgDl,
+      mlSpikeThresholdMgDl,
+      mlSpikeHorizonMinutes,
+      mlSpikeNote,
       useDeviceLocation,
       requestRecommendations,
     ],

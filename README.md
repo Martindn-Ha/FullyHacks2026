@@ -104,7 +104,7 @@ The app shows **API: &lt;base&gt;** at the top so you can confirm what URL is ba
 
 - **`npm run start:cloudflare`** — **Default for Expo Go on restrictive Wi‑Fi** (eduroam, AP isolation): **Cloudflare quick tunnel** → **Metro :8081** with **`--protocol http2`**, then **`expo start --lan`** plus **`EXPO_PACKAGER_PROXY_URL`** so the phone loads the bundle over **HTTPS**. Keep **`backend`** **`npm run dev`** and, for the API, **`npm run tunnel`** with **`EXPO_PUBLIC_API_BASE_URL`** set to that tunnel URL.
 - **`npm run start:lan`** — Only useful when the **phone can open your Mac’s LAN IP** (unrestricted home/office Wi‑Fi). **Not viable on typical eduroam** (client isolation).
-- **`npm run start`** / **`npm run start:tunnel`** — Standard Expo; **`start:tunnel`** may fail with `remote gone away` — try **`mobile/`** **`rm -rf node_modules && npm install`** (and Homebrew **ngrok** reinstall if applicable) before switching tunnels.
+- **`npm run start`** / **`npm run start:tunnel`** — Standard Expo. **`start:tunnel` / `remote gone away`:** do **not** skip the **uninstall + reinstall** steps in **Troubleshooting** below (clean **`mobile/node_modules`**, Homebrew **ngrok** reinstall + authtoken if you use it) **before** assuming the network alone is the problem; then prefer **`start:cloudflare`** if tunnel still fails.
 
 Optional environment (shell only, not required in `.env` unless you want them permanent):
 
@@ -127,7 +127,11 @@ Optional environment (shell only, not required in `.env` unless you want them pe
 - **Phone “network request timed out”** — Phone cannot reach the API host. Confirm Safari can open **`{base}/health`**. If LAN IP never loads, use **`npm run tunnel`** in **`backend/`** and the **trycloudflare** HTTPS base URL in **`mobile/.env`**.
 - **Eduroam: phone cannot open Metro / QR never loads** — Use **`npm run start:cloudflare`** in **`mobile/`**. If **cloudflared** exits immediately, read the script’s dumped logs; try **`EDUROAM_EXPO_VERBOSE=1`**. If tunnels never come up, the network may block **outbound** tunnel traffic — try **GlobalProtect / another campus network**, or develop against the **iOS Simulator** on the Mac (`npx expo start`).
 - **Edits don’t show up live while using `start:cloudflare`** — **Fast Refresh** depends on a **WebSocket** to Metro; **trycloudflare** often breaks or delays that. Press **`r`** in the Expo terminal to **reload** after saves, or **restart** `start:cloudflare` if reload hangs.
-- **`expo start --tunnel` / `remote gone away`** — First try a **clean reinstall** from **`mobile/`**: `rm -rf node_modules && npm install`, then run **`npm run start:tunnel`** again. If you use **Homebrew ngrok**, also `brew uninstall ngrok && brew install ngrok` (or `brew reinstall ngrok`), then `ngrok config add-authtoken <token>` again. If it still fails, use **`npm run start:cloudflare`** (or the **simulator**); see [expo#43335](https://github.com/expo/expo/issues/43335).
+- **`expo start --tunnel` / `remote gone away`** — Treat this as a **broken local toolchain first**, then fall back to Cloudflare. Do these **in order** (skipping reinstall is the usual reason fixes “don’t work”):
+  1. **Clean reinstall Metro deps** (from **`mobile/`**): `rm -rf node_modules && npm install`, then **`npm run start:tunnel`** again.
+  2. **If you use Homebrew ngrok** (separate from Expo’s bundled agent): `brew uninstall ngrok && brew install ngrok` (or `brew reinstall ngrok`), then `ngrok config add-authtoken <token>` from the ngrok dashboard.
+  3. If tunnel still fails: **`npm run start:cloudflare`** in **`mobile/`** (recommended on campus / flaky ngrok); keep **`backend`** **`npm run tunnel`** for **`EXPO_PUBLIC_API_BASE_URL`** when the phone cannot use your LAN IP. See [expo#43335](https://github.com/expo/expo/issues/43335).
+  4. Last resort: **iOS Simulator** on the Mac (`npx expo start`) — no Metro tunnel needed.
 - **Stale tools after many experiments** — Same **`mobile/`** **`node_modules`** reinstall as above when Metro or **cloudflared** behave oddly; restart **`start:cloudflare`** or use **`EDUROAM_EXPO_VERBOSE=1`** to inspect tunnel logs.
 - **`.env` not picked up** — Restart Expo ( **`--clear`** if needed). Restart **`npm run dev`** after editing **`backend/.env`**.
 

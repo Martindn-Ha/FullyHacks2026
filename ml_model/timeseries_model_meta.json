@@ -1,0 +1,26 @@
+{
+  "task": "regression_glucose_target",
+  "model_name": "ridge",
+  "feature_cols": [
+    "glucose_mg_dl",
+    "mean_60",
+    "std_60",
+    "min_60",
+    "max_60",
+    "glucose_lag_15",
+    "slope_15",
+    "tod_sin",
+    "tod_cos"
+  ],
+  "horizon_minutes": 30,
+  "target_mode": "max_in_window",
+  "target_summary": "Maximum glucose in (t, t+horizon] on the 5-minute grid (excludes current bin).",
+  "estimator_class": "sklearn.linear_model._ridge.Ridge",
+  "spike_threshold_mg_dl_for_features": 180.0,
+  "test_metrics": {
+    "mae_mg_dl": 7.769550599112214,
+    "rmse_mg_dl": 12.923150415777563,
+    "r2": 0.8416877621189534
+  },
+  "readme_file": "README_APP.txt"
+}
