@@ -170,7 +170,7 @@ export const GlucoseStripChart = memo(function GlucoseStripChart({
               y2={y}
               stroke={isThresholdHigh ? '#1e293b' : '#e2e8f0'}
               strokeWidth={isThresholdHigh ? 1.75 : 1}
-              strokeDasharray={isThresholdHigh ? 'none' : '4 6'}
+              strokeDasharray="4 6"
             />
           );
         })}
@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     alignSelf: 'center',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#94a3b8',
   },
   axisRow: {
     flexDirection: 'row',
