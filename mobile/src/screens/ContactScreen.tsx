@@ -20,6 +20,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fetchSmsCheckInMessage } from '../api';
 import { useCgmSession } from '../context/CgmSessionContext';
 import PopBubbleSvg from '../../assets/popbubble.svg';
 
@@ -80,7 +81,7 @@ const STORAGE_LABEL = '@tideTogether/smsPresetLabel';
 
 const DEFAULT_TEMPLATE = `This is an automated check-in from Tide Together.
 
-Name on file:
+For (contact receiving this message):
 {{name}}
 
 Glucose (mg/dL):
@@ -121,6 +122,16 @@ function normalizePhoneForSms(raw: string): string {
   return trimmed;
 }
 
+/** One bullet per digit to hide; only the last four digit characters stay visible. */
+function maskPhoneForDisplay(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length === 0) return trimmed;
+  if (digits.length <= 4) return '•'.repeat(digits.length);
+  return '•'.repeat(digits.length - 4) + digits.slice(-4);
+}
+
 /**
  * iOS native ExpoSMS allows only one MFMessageCompose at a time; overlapping `sendSMSAsync` rejects with
  * "SMS sending in progress…". Chain calls so each send waits for the previous composer to finish.
@@ -147,11 +158,13 @@ function enqueueSendSMSAsync(addresses: string[], message: string): Promise<SMSR
 export function ContactScreen() {
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const { displayMgdl, trend, lat, lng } = useCgmSession();
+  const { displayMgdl, trend, lat, lng, glucoseSpikeEvents } = useCgmSession();
 
   const [demoSettingsOpen, setDemoSettingsOpen] = useState(false);
   const [presetLabel, setPresetLabel] = useState('');
   const [presetPhone, setPresetPhone] = useState('');
+  /** When false, the number field shows a masked preview; when true, full value for editing. */
+  const [phoneFieldFocused, setPhoneFieldFocused] = useState(false);
   const [messageTemplate, setMessageTemplate] = useState(DEFAULT_TEMPLATE);
   const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -260,22 +273,31 @@ export function ContactScreen() {
     const latStr = coordsOk ? la.toFixed(5) : 'unavailable';
     const lngStr = coordsOk ? lo.toFixed(5) : 'unavailable';
     const coordinates = coordsOk ? `${latStr}, ${lngStr}` : 'unavailable';
-    const nameStr = presetLabel.trim() || 'not set';
+    /** Preset label = SMS recipient (trusted contact), not the app user. */
+    const contactNameStr = presetLabel.trim() || 'not set';
 
-    let body = applyTemplate(tpl, {
-      name: nameStr,
+    const templateFields: Record<string, string> = {
+      name: contactNameStr,
+      contact_name: contactNameStr,
       glucose: String(Math.round(displayMgdl)),
       trend: trend || '—',
       time: new Date().toLocaleString(),
       lat: latStr,
       lng: lngStr,
       coordinates,
-    });
-    const trimmed = extraSymptoms.map((s) => s.trim()).filter(Boolean);
-    if (trimmed.length > 0) {
-      body +=
-        '\n\n---\nAdditional context (symptoms selected):\n' + trimmed.map((s) => `• ${s}`).join('\n');
-    }
+    };
+
+    const trimmedSymptoms = extraSymptoms.map((s) => s.trim()).filter(Boolean);
+
+    const fallbackBody = () => {
+      let s = applyTemplate(tpl, templateFields);
+      if (trimmedSymptoms.length > 0) {
+        s +=
+          '\n\n---\nAdditional context (symptoms selected):\n' +
+          trimmedSymptoms.map((x) => `• ${x}`).join('\n');
+      }
+      return s;
+    };
 
     let openedComposer = false;
     try {
@@ -301,6 +323,25 @@ export function ContactScreen() {
       setPostIosSmsPop(false);
       setSending(true);
       openedComposer = true;
+
+      let body: string;
+      try {
+        const narrative = await fetchSmsCheckInMessage({
+          symptoms: trimmedSymptoms,
+          templateFields,
+          messageTemplate: tpl,
+          recentSpikeEvents: glucoseSpikeEvents.slice(0, 8).map((e) => ({
+            atMs: e.atMs,
+            glucoseMgDl: e.glucoseMgDl,
+            latitude: e.latitude,
+            longitude: e.longitude,
+          })),
+        });
+        body = narrative.message.trim();
+      } catch (e) {
+        console.warn('[ContactScreen] SMS narrative API failed, using template fallback.', e);
+        body = fallbackBody();
+      }
       let result: SMSResponse['result'];
       try {
         ({ result } = await enqueueSendSMSAsync([to], body));
@@ -341,7 +382,7 @@ export function ContactScreen() {
       }
     }
   },
-    [presetPhone, messageTemplate, presetLabel, displayMgdl, trend, lat, lng],
+    [presetPhone, messageTemplate, presetLabel, displayMgdl, trend, lat, lng, glucoseSpikeEvents],
   );
 
   const handleSymptomPickerDismissed = useCallback(() => {
@@ -416,8 +457,18 @@ export function ContactScreen() {
 
   const presetSummary =
     presetPhone.trim().length > 0
-      ? `${presetLabel.trim() || 'Contact'} · ${presetPhone.trim()}`
+      ? `${presetLabel.trim() || 'Contact'} · ${maskPhoneForDisplay(presetPhone.trim())}`
       : 'No preset number yet — open Demo settings.';
+
+  const presetSummaryA11yLabel =
+    presetPhone.trim().length > 0
+      ? (() => {
+          const d = presetPhone.replace(/\D/g, '');
+          const ending = d.slice(-4);
+          const spaced = ending.split('').join(' ');
+          return `Current preset: ${presetLabel.trim() || 'Contact'}, phone number ending in ${spaced}`;
+        })()
+      : 'No preset number yet. Open demo settings.';
 
   const bubbleW = Math.min(320, Math.max(220, windowWidth - 56));
   const bubbleH = Math.round(bubbleW * 0.72);
@@ -471,7 +522,9 @@ export function ContactScreen() {
             <>
               <View style={styles.card}>
                 <Text style={styles.presetSummaryLabel}>Current preset</Text>
-                <Text style={styles.presetSummaryText}>{presetSummary}</Text>
+                <Text style={styles.presetSummaryText} accessibilityLabel={presetSummaryA11yLabel}>
+                  {presetSummary}
+                </Text>
               </View>
               <View
                 style={[
@@ -564,12 +617,13 @@ export function ContactScreen() {
               >
                 <Text style={styles.modalTitle}>Demo settings</Text>
                 <Text style={styles.modalSubtitle}>
-                  Set the SMS preset: contact name, mobile number, and message template. Placeholders fill from live
-                  glucose, session coordinates, and the name when you send.
+                  Set the SMS preset: the contact’s name (who receives the text), their mobile number, and the
+                  message template. Placeholders fill from live glucose, session coordinates, and that name when you
+                  send.
                 </Text>
 
                 <View style={[styles.controlsCard, styles.modalControlsCard]}>
-                  <Text style={styles.modalFieldLabel}>Contact name (optional)</Text>
+                  <Text style={styles.modalFieldLabel}>Contact name — who receives this SMS (optional)</Text>
                   <TextInput
                     value={presetLabel}
                     onChangeText={setPresetLabel}
@@ -581,14 +635,18 @@ export function ContactScreen() {
 
                   <Text style={styles.modalFieldLabelSpaced}>Mobile number</Text>
                   <TextInput
-                    value={presetPhone}
+                    value={phoneFieldFocused ? presetPhone : maskPhoneForDisplay(presetPhone)}
                     onChangeText={setPresetPhone}
+                    onFocus={() => setPhoneFieldFocused(true)}
+                    onBlur={() => setPhoneFieldFocused(false)}
                     placeholder="+1 555 123 4567"
                     placeholderTextColor="#94a3b8"
                     style={styles.modalInput}
                     keyboardType="phone-pad"
                     autoComplete="tel"
                     textContentType="telephoneNumber"
+                    autoCorrect={false}
+                    spellCheck={false}
                   />
 
                   <Text style={styles.modalFieldLabelSpaced}>Message template</Text>
@@ -597,7 +655,7 @@ export function ContactScreen() {
                       'Short codes in double braces are filled in when you send. You can move or reword them anywhere in your message:'
                     }
                     {'\n\n'}
-                    {'{{name}}\ncontact name from above\n'}
+                    {'{{name}} or {{contact_name}}\nname of the person receiving this SMS (your saved contact), not the patient\n'}
                     {'{{glucose}}\ncurrent reading (mg/dL)\n'}
                     {'{{trend}}\nup / down / steady\n'}
                     {'{{time}}\nwhen you tapped Send\n'}
