@@ -27,8 +27,8 @@ export type PlaceCandidate = {
 
 export type MenuPassage = {
   text: string;
-  /** `human_delta` from retrieval API; `google_test_placeholder` when Human Delta URL is unset (dev only). */
-  source: 'human_delta' | 'google_test_placeholder';
+  /** `human_delta` from retrieval; `human_delta_empty` when search succeeded but returned no hits; `google_test_placeholder` when HD URL is unset (dev). */
+  source: 'human_delta' | 'human_delta_empty' | 'google_test_placeholder';
 };
 
 export type PlaceGuidance = {

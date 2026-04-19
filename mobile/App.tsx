@@ -86,7 +86,7 @@ export default function App() {
       const recs = data.recommendations
         .map((r, idx) => {
           const note = r.groundedNote ? `\n${r.groundedNote}` : '';
-          return `${idx + 1}. ${r.place.name} (~${r.place.distanceM}m)\nSuggested: ${r.suggestedItem}\n${r.explanation}${note}`;
+          return `${idx + 1}. ${r.place.name} (~${r.place.distanceM}m)\nHealthier-style pick: ${r.suggestedItem}\n${r.explanation}${note}`;
         })
         .join('\n\n');
 
@@ -110,9 +110,10 @@ export default function App() {
     <View style={styles.screen}>
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>Nearby meal guidance</Text>
+        <Text style={styles.title}>Healthier options nearby</Text>
         <Text style={styles.subtitle}>
-          Spike-risk estimate plus ranked nearby options. Not medical advice.
+          Finds nearby restaurants, then suggests practical lower-glycemic-style picks using your context
+          (and menu snippets from Human Delta when indexed). Not medical advice.
         </Text>
         <Text style={styles.apiHint} selectable>
           API: {getApiBaseUrl()}
