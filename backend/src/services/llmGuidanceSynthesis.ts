@@ -65,6 +65,9 @@ function splitBlockBody(block: string): ParsedBlock | null {
     line1Raw?.match(/^line\s*2\s*=\s*nutrition\s*[:—\-]\s*(.+)$/i);
   if (nutMatch?.[1]) {
     nutritionInfo = nutMatch[1].trim();
+    if (/^not\s+in\s+snippet\.?$/i.test(nutritionInfo)) {
+      nutritionInfo = 'No Nutritional Info Found.';
+    }
     bodyLines = bodyLines.slice(1);
   }
 
@@ -149,18 +152,21 @@ function parsePlaceBlocks(raw: string, placeIds: string[]): Map<string, ParsedBl
 }
 
 function fallbackPresentationFromRow(row: PlaceGuidanceRow): ParsedBlock {
-  const primary = row.passages[0]?.text ?? '';
-  const name = row.placeName;
-  const t = primary.toLowerCase();
-  let suggestedItem = `Protein-forward plate at ${name}`;
-  if (t.includes('bowl')) suggestedItem = 'Protein bowl, extra vegetables, sauce on the side';
-  else if (t.includes('salad')) suggestedItem = 'Large salad, grilled protein, dressing on the side';
-  else if (t.includes('grilled')) suggestedItem = 'Grilled protein with a non-starchy side';
-  else if (t.includes('soup')) suggestedItem = 'Broth-based soup with a side salad';
+  const primary = row.passages.map((p) => p.text).join('\n').trim();
+  const firstLine =
+    primary
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? primary;
+  const suggestedItem =
+    firstLine.length > 0
+      ? firstLine.slice(0, 140).trim() + (firstLine.length > 140 ? '…' : '')
+      : 'No indexed menu text for this venue';
   return {
     suggestedItem,
-    explanation: 'Default pick: Gemini did not return a parseable PLACE block for this venue.',
-    nutritionInfo: 'not in snippet',
+    explanation:
+      'Gemini did not return a parseable PLACE block; showing a verbatim excerpt from retrieved CONTEXT (not a generated menu item).',
+    nutritionInfo: 'No Nutritional Info Found.',
   };
 }
 
@@ -215,20 +221,24 @@ function buildSystemText(targetIds: string[]): string {
   return [
     'You help with a diabetes-hackathon demo. The user already has moderate or higher near-term post-meal spike risk.',
     'Be very concise. Recommend lower-glycemic-impact orders — not medical treatment.',
-    'When CONTEXT lists calories, carbs, sugar, protein, fiber, or serving sizes, you may quote them briefly on the NUTRITION line. Never invent numbers; if CONTEXT has no nutrition facts, write exactly: NUTRITION: not in snippet',
-    'When CONTEXT has no indexed menu text, still give a practical order line and NUTRITION: not in snippet, plus one short rationale sentence.',
+    'FOOD PICK RULE (per ### heading): If that heading’s CONTEXT is real retrieved menu or nutrition text (not the sentence that begins with "No indexed Human Delta"), the first line after place_id MUST name one specific food, beverage, side, or combo using wording that appears verbatim (or as a clear contiguous substring) in THAT heading’s CONTEXT only. Do not invent items, do not use generic patterns ("grilled protein", "large salad", "protein bowl") unless that exact phrase appears in that CONTEXT. If several items appear, choose the best lower-glycemic option that still satisfies the verbatim rule. If no discrete item name appears in CONTEXT (only headers/legal boilerplate), first line must be exactly: No named menu item in CONTEXT',
+    'When CONTEXT is exactly the boilerplate that says there is no indexed Human Delta menu text for this venue, first line must be exactly: No indexed menu text for this venue',
+    'When CONTEXT lists any nutrition numbers or labeled values (calories, carbohydrate/sugar/fiber/protein/fat/sodium/cholesterol, kcal, kJ, mg, g, %DV, or serving sizes), quote the most relevant ones briefly on the NUTRITION line. Never invent numbers; if CONTEXT truly has none of these, write exactly: NUTRITION: No Nutritional Info Found.',
     'Do not diagnose or prescribe.',
     'Plain text only (no JSON). One block per venue using PLACE_BEGIN and PLACE_END (all caps).',
     'Exact shape — three lines after place_id, no blank lines inside the block. Do NOT prefix lines with Line1, Line2, or Line3.',
     'PLACE_BEGIN',
     '<exact place_id from ### heading>',
-    'First line: short order (max ~12 words), plain text only.',
-    'Second line: NUTRITION: <brief facts from CONTEXT only, or "not in snippet">',
+    'First line: see FOOD PICK RULE above (max ~14 words unless the CONTEXT name is longer — then truncate with an ellipsis).',
+    'Second line: NUTRITION: <brief facts from CONTEXT only, or "No Nutritional Info Found.">',
     'Third line: one sentence only (~25 words max) on why this order helps spike risk.',
     'PLACE_END',
     `Include one block per place_id: ${targetIds.join(', ')}.`,
   ].join(' ');
 }
+
+/** Dev-only placeholder when Human Delta URL is unset — not real retrieval. */
+const SKIP_CONTEXT_SOURCES = new Set(['google_test_placeholder']);
 
 function buildUserBlocks(placeById: Map<string, PlaceCandidate>, rows: PlaceGuidanceRow[]): {
   blocks: string[];
@@ -237,12 +247,12 @@ function buildUserBlocks(placeById: Map<string, PlaceCandidate>, rows: PlaceGuid
   const blocks: string[] = [];
   const targetIds: string[] = [];
   for (const row of rows) {
-    const hasHd = row.passages.some((p) => p.source === 'human_delta');
+    const contextPassages = row.passages.filter((p) => !SKIP_CONTEXT_SOURCES.has(p.source) && p.text.trim());
+    const hasRetrievalContext = contextPassages.length > 0;
     const place = placeById.get(row.placeId);
     targetIds.push(row.placeId);
-    if (hasHd) {
-      const retrieval = row.passages
-        .filter((p) => p.source === 'human_delta')
+    if (hasRetrievalContext) {
+      const retrieval = contextPassages
         .map((p) => p.text)
         .join('\n---\n')
         .slice(0, MAX_CONTEXT_CHARS_PER_PLACE);
@@ -251,7 +261,7 @@ function buildUserBlocks(placeById: Map<string, PlaceCandidate>, rows: PlaceGuid
       );
     } else {
       blocks.push(
-        `### ${place?.name ?? row.placeName} (place_id: ${row.placeId})\nCONTEXT:\n(No indexed Human Delta menu text for this venue. Suggest practical lower-glycemic-style ideas from the name and typical quick-service patterns only; do not invent specific branded menu items.)`,
+        `### ${place?.name ?? row.placeName} (place_id: ${row.placeId})\nCONTEXT:\n(No indexed Human Delta menu text for this venue. Do not invent menu items. Follow the system rule for this CONTEXT: use the required first-line boilerplate, NUTRITION: No Nutritional Info Found., then a short generic spike-risk rationale only.)`,
       );
     }
   }
@@ -454,7 +464,7 @@ export async function synthesizeGuidanceWithGemini(params: {
         rows: [row],
         riskLine,
         temperature: 0.1,
-        userSuffix: `STRICT FORMAT: After PLACE_BEGIN, the next line must be EXACTLY this place_id and nothing else:\n${placeId}\nThen three lines: order, NUTRITION: ..., one rationale sentence. Then PLACE_END.`,
+        userSuffix: `STRICT FORMAT: After PLACE_BEGIN, the next line must be EXACTLY this place_id and nothing else:\n${placeId}\nThen three lines: (1) first line must name a food using wording copied from that venue's CONTEXT only, (2) NUTRITION: ..., (3) one rationale sentence. Then PLACE_END.`,
       });
       for (const [k, v] of one) {
         mergedMap.set(k, v);

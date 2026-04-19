@@ -9,12 +9,21 @@ const HUMAN_DELTA_FETCH_TIMEOUT_MS = 90_000;
  * `top_k`, `sources`, `index_id`. Gemini is not called by Human Delta — you retrieve here, then pass
  * chunks into Vertex/Gemini in `synthesizeGuidanceWithGemini`.
  */
+/**
+ * Human Delta `POST /v1/search`: `sources` selects corpora; `index_id` scopes a **website crawl** index
+ * (see Human_delta_rest_api.txt). Sending `index_id` while also searching `documents` can pin or dilute
+ * results against an empty crawl — omit `index_id` whenever `documents` is in `sources`.
+ */
 function officialSearchBodyFromEnv(): {
   top_k: number;
-  sources?: string[];
+  sources: string[];
   index_id?: string;
 } {
-  const out: { top_k: number; sources?: string[]; index_id?: string } = { top_k: 10 };
+  const out: { top_k: number; sources: string[]; index_id?: string } = {
+    top_k: 10,
+    /** Explicit default: both corpora (API says omit = both; explicit avoids “web-only” misconfig). */
+    sources: ['documents', 'web'],
+  };
   const tk = process.env.HUMAN_DELTA_TOP_K?.trim();
   if (tk) {
     const n = Number(tk);
@@ -22,26 +31,37 @@ function officialSearchBodyFromEnv(): {
       out.top_k = Math.min(20, Math.max(1, Math.round(n)));
     }
   }
-  const iid = process.env.HUMAN_DELTA_INDEX_ID?.trim();
-  if (iid) {
-    out.index_id = iid;
-  }
+
   const src = process.env.HUMAN_DELTA_SOURCES?.trim();
   if (src) {
+    let parsed: string[] | null = null;
     if (src.startsWith('[')) {
       try {
         const j = JSON.parse(src) as unknown;
         if (Array.isArray(j) && j.every((x) => typeof x === 'string')) {
-          out.sources = j as string[];
+          parsed = (j as string[]).map((s) => s.trim()).filter(Boolean);
         }
       } catch {
         /* ignore invalid JSON */
       }
     }
-    if (!out.sources) {
-      out.sources = src.split(',').map((s) => s.trim()).filter(Boolean);
+    if (!parsed?.length) {
+      parsed = src.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (parsed.length) {
+      out.sources = parsed;
     }
   }
+
+  const iid = process.env.HUMAN_DELTA_INDEX_ID?.trim();
+  const srcLower = out.sources.map((s) => s.toLowerCase());
+  const wantsWeb = srcLower.includes('web');
+  const wantsDocuments = srcLower.includes('documents');
+  /** Crawl index id only when searching web alone (uploads-only / docs+web should not bind to a crawl index). */
+  if (iid && wantsWeb && !wantsDocuments) {
+    out.index_id = iid;
+  }
+
   return out;
 }
 
@@ -60,7 +80,7 @@ export type LlmGuidancePresentation = {
   suggestedItem: string;
   /** One short sentence from Gemini (spike-risk rationale). */
   explanation: string;
-  /** Calories/macros from CONTEXT only when present; otherwise omitted or “not in snippet”. */
+  /** Calories/macros from CONTEXT only when present; otherwise omitted or “No Nutritional Info Found.” */
   nutritionInfo?: string;
 };
 
@@ -107,7 +127,7 @@ export async function retrieveMenuGuidance(params: {
           ...places.map((p) => `- ${p.id}: ${p.name}${p.vicinity ? ` — ${p.vicinity}` : ''}`),
         ].join('\n'),
         top_k: hdSearch.top_k,
-        ...(hdSearch.sources?.length ? { sources: hdSearch.sources } : {}),
+        sources: hdSearch.sources,
         ...(hdSearch.index_id ? { index_id: hdSearch.index_id } : {}),
       }
     : {
@@ -136,6 +156,12 @@ export async function retrieveMenuGuidance(params: {
 
   const rawText = await res.text();
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      console.warn(
+        `[humanDeltaClient] Human Delta HTTP ${res.status} (auth). ${rawText.slice(0, 200)} — using generic venue guidance. Fix HUMAN_DELTA_API_KEY or clear HUMAN_DELTA_API_URL to skip Human Delta.`,
+      );
+      return buildInvalidHumanDeltaKeyFallback(places);
+    }
     throw new IntegrationError(
       `Human Delta returned HTTP ${res.status}: ${rawText.slice(0, 800)}`,
       502,
@@ -153,12 +179,13 @@ export async function retrieveMenuGuidance(params: {
   if (!parsed?.length && useOfficialSearch) {
     const snippets = extractSnippetsFromSearchJson(json);
     if (snippets.length) {
-      const blob = snippets.slice(0, 20).join('\n\n');
-      parsed = places.map((p) => ({
-        placeId: p.id,
-        placeName: p.name,
-        passages: [{ text: blob, source: 'human_delta' }],
-      }));
+      parsed = buildRowsFromGenericSnippets(places, snippets);
+      const withHd = parsed.filter((r) => r.passages.some((x) => x.source === 'human_delta')).length;
+      if (withHd < places.length) {
+        console.warn(
+          `[humanDeltaClient] Generic HD response: bound snippets to ${withHd}/${places.length} venues by name match; others use venue-specific empty guidance (no cross-venue menu reuse).`,
+        );
+      }
     }
   }
   if (!parsed || parsed.length === 0) {
@@ -358,6 +385,207 @@ function extractSnippetsFromSearchJson(json: unknown, depth = 0): string[] {
   return out;
 }
 
+/**
+ * One pooled Human Delta response often contains multiple paragraphs; split so we can route
+ * "Juice It Up" text to that venue only instead of pasting the whole pool onto every `place_id`.
+ */
+const SNIPPET_PART_MIN = 4;
+const LONG_SNIPPET_SPLIT = 900;
+
+function splitPooledSearchSnippets(snippets: string[]): string[] {
+  const out: string[] = [];
+  for (const sn of snippets) {
+    const raw = sn.trim();
+    if (!raw.length) continue;
+
+    const parts = raw
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > SNIPPET_PART_MIN);
+    if (parts.length > 1) {
+      for (const p of parts) out.push(p);
+      continue;
+    }
+
+    if (raw.length > LONG_SNIPPET_SPLIT) {
+      const lines = raw
+        .split(/\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > SNIPPET_PART_MIN);
+      if (lines.length >= 4) {
+        for (const line of lines) out.push(line);
+        continue;
+      }
+    }
+    out.push(raw);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * True if this chunk plausibly refers to the same brand as `place` (Google `name` / vicinity).
+ * Prevents one chain's nutrition PDF from becoming CONTEXT for unrelated nearby results.
+ */
+/** Normalize quotes so "Carl's" / Carls / PDF unicode apostrophes still align. */
+function normalizeForBrandMatch(t: string): string {
+  return t
+    .toLowerCase()
+    .replace(/[''’`´]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extra tokens / regexes for chains where Google `displayName` and nutrition PDF headings differ.
+ */
+function snippetBrandSignals(placeName: string): { needles: string[]; regexes: RegExp[] } {
+  const needles: string[] = [];
+  const regexes: RegExp[] = [];
+  const n = placeName.toLowerCase();
+
+  const looksCarls =
+    /\bcarl'?s?\b/i.test(placeName) || /\bcarls\b/i.test(placeName) || /\bcarl\s+j/i.test(placeName);
+  if (looksCarls) {
+    needles.push('carls');
+    regexes.push(/\bcarls?\b/i, /\bcarl\s*'?s?\s*j/i, /\bcke\b/i);
+  }
+  if (n.includes('in-n-out') || n.includes('in n out')) {
+    needles.push('in-n-out', 'innout', 'in n out');
+    regexes.push(/\bin-?n-?out\b/i);
+  }
+
+  return { needles, regexes };
+}
+
+function snippetMentionsVenue(snippet: string, place: PlaceCandidate): boolean {
+  const s = snippet.toLowerCase();
+  const normalizedSnippet = normalizeForBrandMatch(snippet);
+  const brand = normalizeForBrandMatch(place.name);
+  if (brand.length >= 5 && normalizedSnippet.includes(brand)) return true;
+
+  const tokens = brand.split(/[^a-z0-9]+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (t.length >= 4 && s.includes(t)) return true;
+  }
+
+  const { needles, regexes } = snippetBrandSignals(place.name);
+  for (const nd of needles) {
+    if (nd.length >= 4 && s.includes(nd)) return true;
+  }
+  for (const re of regexes) {
+    if (re.test(snippet)) return true;
+  }
+
+  const vic = place.vicinity?.toLowerCase().replace(/[''’`]/g, '').trim();
+  if (vic && vic.length >= 5 && s.includes(vic)) {
+    for (const t of tokens) {
+      if (t.length >= 4 && s.includes(t)) return true;
+    }
+    for (const nd of needles) {
+      if (nd.length >= 4 && s.includes(nd)) return true;
+    }
+  }
+  return false;
+}
+
+/** Strength of association between one chunk and a venue (0 = no signal). */
+function scoreChunkForPlace(chunk: string, place: PlaceCandidate): number {
+  const s = chunk.toLowerCase();
+  let score = 0;
+  const brand = normalizeForBrandMatch(place.name);
+  if (brand.length >= 5 && normalizeForBrandMatch(chunk).includes(brand)) score += 50;
+
+  const tokens = brand.split(/[^a-z0-9]+/).filter((t) => t.length >= 4);
+  for (const t of tokens) {
+    if (s.includes(t)) score += Math.min(24, t.length + 4);
+  }
+  const { needles, regexes } = snippetBrandSignals(place.name);
+  for (const nd of needles) {
+    if (nd.length >= 4 && s.includes(nd)) score += 18;
+  }
+  for (const re of regexes) {
+    if (re.test(chunk)) score += 18;
+  }
+  return score;
+}
+
+function buildRowsFromGenericSnippets(places: PlaceCandidate[], snippets: string[]): PlaceGuidanceRow[] {
+  const pooled = snippets.join('\n\n').trim();
+  const chunks = splitPooledSearchSnippets(snippets);
+  const workChunks = chunks.length ? chunks : pooled ? [pooled] : [];
+
+  const strictRows = places.map((p) => {
+    let rel = workChunks.filter((c) => snippetMentionsVenue(c, p));
+    if (!rel.length && pooled.length > 0 && snippetMentionsVenue(pooled, p)) {
+      rel = [pooled];
+    }
+    return { p, rel };
+  });
+
+  const anyStrict = strictRows.some(({ rel }) => rel.length > 0);
+  if (!anyStrict && workChunks.length > 0) {
+    console.warn(
+      '[humanDeltaClient] No strict venue name match on any chunk; assigning each chunk to the strongest-scoring venue (nutrition tables often omit the brand on every line).',
+    );
+    const byId = new Map<string, string[]>(places.map((pl) => [pl.id, [] as string[]]));
+    for (const ch of workChunks) {
+      let best: { place: PlaceCandidate; score: number } | null = null;
+      for (const pl of places) {
+        const sc = scoreChunkForPlace(ch, pl);
+        if (sc <= 0) continue;
+        if (
+          !best ||
+          sc > best.score ||
+          (sc === best.score && pl.distanceM < best.place.distanceM)
+        ) {
+          best = { place: pl, score: sc };
+        }
+      }
+      if (best) byId.get(best.place.id)!.push(ch);
+    }
+    return places.map((p) => {
+      const rel = byId.get(p.id) ?? [];
+      if (rel.length) {
+        return {
+          placeId: p.id,
+          placeName: p.name,
+          passages: [{ text: rel.slice(0, 20).join('\n\n'), source: 'human_delta' as const }],
+        };
+      }
+      return {
+        placeId: p.id,
+        placeName: p.name,
+        passages: [
+          {
+            source: 'human_delta_empty' as const,
+            text: `Human Delta returned search text, but no chunk clearly matched "${p.name}" (place_id ${p.id}). Another venue's menu text was not reused. Add or improve indexed content that names this brand so vector search can bind chunks to this location.`,
+          },
+        ],
+      };
+    });
+  }
+
+  return strictRows.map(({ p, rel }) => {
+    if (rel.length) {
+      return {
+        placeId: p.id,
+        placeName: p.name,
+        passages: [{ text: rel.slice(0, 20).join('\n\n'), source: 'human_delta' as const }],
+      };
+    }
+    return {
+      placeId: p.id,
+      placeName: p.name,
+      passages: [
+        {
+          source: 'human_delta_empty' as const,
+          text: `Human Delta returned search text, but no chunk clearly matched "${p.name}" (place_id ${p.id}). Another venue's menu text was not reused. Add or improve indexed content that names this brand so vector search can bind chunks to this location.`,
+        },
+      ],
+    };
+  });
+}
+
 /** When Human Delta is configured but search returns no indexed hits (e.g. `{ "results": [] }`). */
 export function buildHumanDeltaEmptyFallbackGuidance(places: PlaceCandidate[]): PlaceGuidanceRow[] {
   return places.map((p) => ({
@@ -368,6 +596,21 @@ export function buildHumanDeltaEmptyFallbackGuidance(places: PlaceCandidate[]): 
         source: 'human_delta_empty',
         text:
           `Human Delta search returned no indexed documents for "${p.name}" yet. Use Google place_id ${p.id} to find official menus or nutrition PDFs and add them to your Human Delta corpus. Until then: prefer grilled protein, salads with dressing on the side, vegetables, and water or unsweetened drinks; limit sugary sauces and large refined-starch portions.`,
+      },
+    ],
+  }));
+}
+
+/** When Human Delta rejects the key: same shape as placeholder so Gemini + ranking still run. */
+export function buildInvalidHumanDeltaKeyFallback(places: PlaceCandidate[]): PlaceGuidanceRow[] {
+  return places.map((p) => ({
+    placeId: p.id,
+    placeName: p.name,
+    passages: [
+      {
+        source: 'human_delta_key_invalid',
+        text:
+          `Human Delta rejected the API key (invalid or revoked). For "${p.name}", prefer grilled protein, salads with dressing on the side, vegetables, and unsweetened drinks; limit sugary sauces and large refined-starch portions.`,
       },
     ],
   }));

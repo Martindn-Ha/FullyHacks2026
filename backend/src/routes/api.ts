@@ -10,6 +10,8 @@ import {
 import { synthesizeGuidanceWithGemini } from '../services/llmGuidanceSynthesis.js';
 import { rankFoodRecommendations } from '../services/recommendationEngine.js';
 import { IntegrationError } from '../services/integrationError.js';
+import { buildExerciseRecommendations } from '../services/exerciseRecommendationEngine.js';
+import { fetchWeatherSnapshot } from '../services/openMeteoClient.js';
 import {
   tryReadClarityDemoCsv,
   type ClarityDemoDataset,
@@ -255,6 +257,8 @@ apiRouter.post('/recommendations', async (req, res) => {
         safety,
         risk: null,
         recommendations: [],
+        exerciseRecommendations: [],
+        weather: null,
         sources: { places: 'none', guidance: 'none' },
         escalationMessage: safety.message,
         disclaimer:
@@ -273,10 +277,7 @@ apiRouter.post('/recommendations', async (req, res) => {
       risk = {
         riskScore: Math.max(risk.riskScore, 0.4),
         severity: sev,
-        factors: [
-          ...risk.factors,
-          '(dev) Low-risk gate bypassed — unset DEV_BYPASS_LOW_RISK_RECOMMENDATIONS_GATE in backend/.env for real behavior.',
-        ],
+        factors: risk.factors,
       };
     }
 
@@ -289,6 +290,8 @@ apiRouter.post('/recommendations', async (req, res) => {
           factors: risk.factors,
         },
         recommendations: [],
+        exerciseRecommendations: [],
+        weather: null,
         sources: { places: 'none', guidance: 'none' },
         recommendationsNote:
           'Meal picks are only returned when near-term spike risk is moderate or higher. Your inputs look stable enough that we are not suggesting specific restaurants here.',
@@ -359,9 +362,17 @@ apiRouter.post('/recommendations', async (req, res) => {
       guidance,
       severity: risk.severity,
     });
+    const weatherResult = await fetchWeatherSnapshot({
+      latitude: context.latitude,
+      longitude: context.longitude,
+    });
+    const exerciseRecommendations = buildExerciseRecommendations({
+      severity: risk.severity,
+      weather: weatherResult.weather,
+    });
 
     console.log(
-      `[api recommendations] ok places=${nearby.places.length} recs=${recommendations.length} severity=${risk.severity}`,
+      `[api recommendations] ok places=${nearby.places.length} recs=${recommendations.length} exercise=${exerciseRecommendations.length} severity=${risk.severity}`,
     );
 
     return res.json({
@@ -372,9 +383,12 @@ apiRouter.post('/recommendations', async (req, res) => {
         factors: risk.factors,
       },
       recommendations,
+      exerciseRecommendations,
+      weather: weatherResult.weather,
       sources: {
         places: nearby.source,
         guidance: guidanceSource,
+        weather: weatherResult.source,
       },
       disclaimer:
         'This MVP suggests practical meal patterns near you. It is not a diagnosis, not guaranteed treatment advice, and does not replace clinician guidance.',
