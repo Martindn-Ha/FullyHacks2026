@@ -21,8 +21,8 @@ import { DEFAULT_TIME_COMPRESSION, useSimulatedCgmPlayback } from '../clarity/us
 
 /** When predicted max (purple / Ridge) exceeds this, auto-run device location + recommendations once until it drops. */
 const AUTO_RECS_PREDICTED_MAX_MG_DL = 180;
-/** Prediction must stay at/below threshold at least this long before a new high can trigger auto recommendations (ignores brief dips). */
-const AUTO_RECS_MIN_BELOW_THRESHOLD_MS = 5 * 60 * 1000;
+// /** @deprecated Latch timing disabled — re-arm when pred ≤ threshold immediately (no sustained real-time wait). */
+// const AUTO_RECS_MIN_BELOW_THRESHOLD_MS = 5 * 60 * 1000;
 /** Log a spike event when displayed CGM is strictly above this (mg/dL). */
 const GLUCOSE_SPIKE_LOG_MG_DL = 180;
 /** After logging, allow another log only after glucose falls below this (mg/dL). */
@@ -157,11 +157,10 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const [glucoseSpikeEvents, setGlucoseSpikeEvents] = useState<GlucoseSpikeEventVm[]>([]);
   const recommendationsScrollRef = useRef<ScrollView>(null);
   const autoRecsFromPredictionLatchRef = useRef(false);
-  /** When latched, first time we see pred ≤ threshold; used to require sustained “low” before re-arming. */
-  const dipBelowThresholdSinceMsRef = useRef<number | null>(null);
-  /** One local notification per predicted-high episode, only after `recommendationResults` exists. */
+  /** One local notification per predicted-high episode, only after recommendations have succeeded at least once. */
   const spikeNotifyLatchRef = useRef(false);
-  const spikeNotifyDipBelowSinceMsRef = useRef<number | null>(null);
+  /** Survives `setRecommendationResults(null)` while a fetch is in flight (auto-recs clears results at request start). */
+  const recommendationSuccessEverRef = useRef(false);
   const spikeNotifyInFlightRef = useRef(false);
   const glucoseSpikeEventLoggedLatchRef = useRef(false);
 
@@ -398,6 +397,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         weather: data.weather ?? null,
         note: note || undefined,
       });
+      recommendationSuccessEverRef.current = true;
       setTimeout(() => recommendationsScrollRef.current?.scrollToEnd({ animated: true }), 150);
       return true;
     } catch (e) {
@@ -417,7 +417,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
 
   /**
    * Predicted max > 180 → foreground location + recommendations (once per high episode).
-   * Must stay ≤ threshold for `AUTO_RECS_MIN_BELOW_THRESHOLD_MS` before re-arming; a short dip then spike does not re-trigger.
+   * Re-arms as soon as pred ≤ threshold (5‑min sustained dip / brief‑dip latch commented out).
    * `playbackT` is in deps so duration is re-evaluated during CGM replay.
    */
   useEffect(() => {
@@ -426,7 +426,6 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
 
     const resetEpisode = () => {
       autoRecsFromPredictionLatchRef.current = false;
-      dipBelowThresholdSinceMsRef.current = null;
     };
 
     if (!mlSpikeReady || !predOk) {
@@ -437,24 +436,8 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
     }
 
     if (pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
-      if (autoRecsFromPredictionLatchRef.current) {
-        if (dipBelowThresholdSinceMsRef.current == null) {
-          dipBelowThresholdSinceMsRef.current = Date.now();
-        } else if (Date.now() - dipBelowThresholdSinceMsRef.current >= AUTO_RECS_MIN_BELOW_THRESHOLD_MS) {
-          resetEpisode();
-        }
-      } else {
-        dipBelowThresholdSinceMsRef.current = null;
-      }
+      resetEpisode();
       return;
-    }
-
-    if (dipBelowThresholdSinceMsRef.current != null) {
-      const dipMs = Date.now() - dipBelowThresholdSinceMsRef.current;
-      dipBelowThresholdSinceMsRef.current = null;
-      if (dipMs < AUTO_RECS_MIN_BELOW_THRESHOLD_MS && autoRecsFromPredictionLatchRef.current) {
-        return;
-      }
     }
 
     if (autoRecsFromPredictionLatchRef.current) return;
@@ -484,8 +467,9 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   }, [mlSpikeReady, mlPredictedMaxMgDl, requestRecommendations, playbackT]);
 
   /**
-   * Predicted max > 180 → local notification once per episode, only after at least one successful recommendations payload.
-   * Re-arms after the same sustained “low” window as auto recommendations (ignores brief dips).
+   * Predicted max > 180 → local notification once per episode, only after recommendations have succeeded at least once.
+   * Uses `recommendationSuccessEverRef` so a refetch that temporarily sets `recommendationResults` to null does not block alerts.
+   * Re-arms as soon as pred ≤ threshold (5‑min sustained dip / brief‑dip latch commented out).
    */
   useEffect(() => {
     const pred = mlPredictedMaxMgDl;
@@ -493,7 +477,6 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
 
     const resetEpisode = () => {
       spikeNotifyLatchRef.current = false;
-      spikeNotifyDipBelowSinceMsRef.current = null;
     };
 
     if (!mlSpikeReady || !predOk) {
@@ -504,27 +487,11 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
     }
 
     if (pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
-      if (spikeNotifyLatchRef.current) {
-        if (spikeNotifyDipBelowSinceMsRef.current == null) {
-          spikeNotifyDipBelowSinceMsRef.current = Date.now();
-        } else if (Date.now() - spikeNotifyDipBelowSinceMsRef.current >= AUTO_RECS_MIN_BELOW_THRESHOLD_MS) {
-          resetEpisode();
-        }
-      } else {
-        spikeNotifyDipBelowSinceMsRef.current = null;
-      }
+      resetEpisode();
       return;
     }
 
-    if (spikeNotifyDipBelowSinceMsRef.current != null) {
-      const dipMs = Date.now() - spikeNotifyDipBelowSinceMsRef.current;
-      spikeNotifyDipBelowSinceMsRef.current = null;
-      if (dipMs < AUTO_RECS_MIN_BELOW_THRESHOLD_MS && spikeNotifyLatchRef.current) {
-        return;
-      }
-    }
-
-    if (recommendationResults == null) return;
+    if (!recommendationSuccessEverRef.current) return;
     if (spikeNotifyLatchRef.current || spikeNotifyInFlightRef.current) return;
 
     spikeNotifyInFlightRef.current = true;
@@ -532,6 +499,11 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       try {
         const allowed = await ensureSpikeNotificationSetup();
         if (!allowed) {
+          if (__DEV__) {
+            console.warn(
+              '[spike notification] Permission denied or unavailable. iOS: Settings → Notifications → Tide Together.',
+            );
+          }
           spikeNotifyLatchRef.current = true;
           return;
         }
