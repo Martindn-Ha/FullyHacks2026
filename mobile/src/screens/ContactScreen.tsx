@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SMS from 'expo-sms';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,20 +15,45 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCgmSession } from '../context/CgmSessionContext';
+import PopBubbleSvg from '../../assets/popbubble.svg';
+
+/** Debug: keep pop art visible instead of only while pressed. Set `false` before shipping. */
+const DEBUG_STICKY_POPBUBBLE_SVG = false;
+
+/** After MFMessageCompose returns, iOS still animates the sheet away — hold pop art through that fade. */
+const IOS_SMS_DISMISS_HOLD_MS = 450;
 
 const seafloorBackground = require('../../assets/seafloor.png');
 const magikarpGif = require('../../assets/magikarp.gif');
+const bubblePng = require('../../assets/bubblr.png');
 
 const STORAGE_PHONE = '@tideTogether/smsPresetPhone';
 const STORAGE_TEMPLATE = '@tideTogether/smsPresetTemplate';
 const STORAGE_LABEL = '@tideTogether/smsPresetLabel';
 
-const DEFAULT_TEMPLATE =
-  'Tide Together — alert for {{name}}. CGM ~{{glucose}} mg/dL, trend {{trend}}, at {{time}}. Location {{coordinates}} (lat {{lat}}, lng {{lng}}). Please check in if you can.';
+const DEFAULT_TEMPLATE = `This is an automated check-in from Tide Together.
+
+Name on file:
+{{name}}
+
+Glucose (mg/dL):
+{{glucose}}
+
+Trend:
+{{trend}}
+
+Sent at:
+{{time}}
+
+Coordinates:
+{{coordinates}}
+
+If you are able to, please check in with me. Thank you.`;
 
 function applyTemplate(template: string, vars: Record<string, string>): string {
   let s = template;
@@ -56,6 +81,7 @@ function normalizePhoneForSms(raw: string): string {
 
 export function ContactScreen() {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const { displayMgdl, trend, lat, lng } = useCgmSession();
 
   const [demoSettingsOpen, setDemoSettingsOpen] = useState(false);
@@ -65,6 +91,16 @@ export function ContactScreen() {
   const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
+  const [postIosSmsPop, setPostIosSmsPop] = useState(false);
+  const postIosSmsPopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (postIosSmsPopTimerRef.current) {
+        clearTimeout(postIosSmsPopTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,10 +156,10 @@ export function ContactScreen() {
     const la = Number(lat);
     const lo = Number(lng);
     const coordsOk = Number.isFinite(la) && Number.isFinite(lo);
-    const latStr = coordsOk ? la.toFixed(5) : '—';
-    const lngStr = coordsOk ? lo.toFixed(5) : '—';
-    const coordinates = coordsOk ? `${latStr}, ${lngStr}` : '—';
-    const nameStr = presetLabel.trim() || '—';
+    const latStr = coordsOk ? la.toFixed(5) : 'unavailable';
+    const lngStr = coordsOk ? lo.toFixed(5) : 'unavailable';
+    const coordinates = coordsOk ? `${latStr}, ${lngStr}` : 'unavailable';
+    const nameStr = presetLabel.trim() || 'not set';
 
     const body = applyTemplate(tpl, {
       name: nameStr,
@@ -135,6 +171,7 @@ export function ContactScreen() {
       coordinates,
     });
 
+    let openedComposer = false;
     try {
       const available = await SMS.isAvailableAsync();
       if (!available) {
@@ -147,7 +184,13 @@ export function ContactScreen() {
         return;
       }
 
+      if (postIosSmsPopTimerRef.current) {
+        clearTimeout(postIosSmsPopTimerRef.current);
+        postIosSmsPopTimerRef.current = null;
+      }
+      setPostIosSmsPop(false);
       setSending(true);
+      openedComposer = true;
       const { result } = await SMS.sendSMSAsync([to], body);
       if (result === 'cancelled') {
         Alert.alert('Cancelled', 'Message was not sent.');
@@ -162,6 +205,19 @@ export function ContactScreen() {
       Alert.alert('SMS error', msg);
     } finally {
       setSending(false);
+      if (postIosSmsPopTimerRef.current) {
+        clearTimeout(postIosSmsPopTimerRef.current);
+        postIosSmsPopTimerRef.current = null;
+      }
+      if (openedComposer && Platform.OS === 'ios') {
+        setPostIosSmsPop(true);
+        postIosSmsPopTimerRef.current = setTimeout(() => {
+          postIosSmsPopTimerRef.current = null;
+          setPostIosSmsPop(false);
+        }, IOS_SMS_DISMISS_HOLD_MS);
+      } else {
+        setPostIosSmsPop(false);
+      }
     }
   }, [presetPhone, messageTemplate, presetLabel, displayMgdl, trend, lat, lng]);
 
@@ -169,6 +225,9 @@ export function ContactScreen() {
     presetPhone.trim().length > 0
       ? `${presetLabel.trim() || 'Contact'} · ${presetPhone.trim()}`
       : 'No preset number yet — open Demo settings.';
+
+  const bubbleW = Math.min(320, Math.max(220, windowWidth - 56));
+  const bubbleH = Math.round(bubbleW * 0.72);
 
   return (
     <ImageBackground
@@ -209,29 +268,69 @@ export function ContactScreen() {
           <Text style={styles.subtitle}>Preset SMS alert</Text>
 
           <Text style={styles.hint}>
-            Send opens Messages with your template filled in — you tap Send. iOS/Android do not allow silent SMS from
-            apps.
+            Send opens Messages with your template filled in — iOS/Android do not allow silent SMS from apps.
           </Text>
 
           {!hydrated ? (
             <ActivityIndicator color="#0ea5e9" style={styles.loader} />
           ) : (
-            <View style={styles.card}>
-              <Text style={styles.presetSummaryLabel}>Current preset</Text>
-              <Text style={styles.presetSummaryText}>{presetSummary}</Text>
-
-              <Pressable
-                onPress={() => void sendAutomatedText()}
-                disabled={sending}
-                style={({ pressed }) => [styles.btnPrimary, pressed && styles.btnPressed, sending && styles.btnDisabled]}
+            <>
+              <View style={styles.card}>
+                <Text style={styles.presetSummaryLabel}>Current preset</Text>
+                <Text style={styles.presetSummaryText}>{presetSummary}</Text>
+              </View>
+              <View
+                style={[
+                  styles.sendCircleArea,
+                  { minHeight: Math.max(200, Math.round(windowHeight * 0.36)) },
+                ]}
               >
-                {sending ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnPrimaryText}>Send alert SMS</Text>
-                )}
-              </Pressable>
-            </View>
+                <View style={styles.sendBubbleOuter}>
+                  <Pressable
+                    onPress={() => void sendAutomatedText()}
+                    disabled={sending || postIosSmsPop}
+                    style={({ pressed }) => [
+                      styles.sendBubblePress,
+                      pressed && styles.btnPressed,
+                      (sending || postIosSmsPop) && styles.btnDisabled,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send alert SMS"
+                  >
+                    {({ pressed }) => (
+                      <View style={[styles.sendBubbleFrame, { width: bubbleW, height: bubbleH }]}>
+                        {DEBUG_STICKY_POPBUBBLE_SVG || pressed || sending || postIosSmsPop ? (
+                          <PopBubbleSvg
+                            width={bubbleW}
+                            height={bubbleH}
+                            viewBox="0 0 640 560"
+                            preserveAspectRatio="xMidYMid meet"
+                            style={[styles.sendBubbleImage, { width: bubbleW, height: bubbleH }]}
+                            accessibilityElementsHidden
+                          />
+                        ) : (
+                          <Image
+                            source={bubblePng}
+                            style={[styles.sendBubbleImage, { width: bubbleW, height: bubbleH }]}
+                            resizeMode="contain"
+                            accessibilityElementsHidden
+                          />
+                        )}
+                        <View style={styles.sendBubbleTextShell} pointerEvents="none">
+                          {sending ? (
+                            <ActivityIndicator color="#0e7490" size="large" />
+                          ) : (
+                            <Text style={styles.sendBubbleText}>
+                              Send alert{'\n'}SMS
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -292,19 +391,35 @@ export function ContactScreen() {
 
                   <Text style={styles.modalFieldLabelSpaced}>Message template</Text>
                   <Text style={styles.modalPlaceholderHelp}>
-                    {'Placeholders (copy into your text):'}
-                    {'\n'}
-                    {'{{name}}, {{glucose}}, {{trend}}, {{time}}'}
-                    {'\n'}
-                    {'{{lat}}, {{lng}}, {{coordinates}}'}
+                    {
+                      'Short codes in double braces are filled in when you send. You can move or reword them anywhere in your message:'
+                    }
+                    {'\n\n'}
+                    {'{{name}}\ncontact name from above\n'}
+                    {'{{glucose}}\ncurrent reading (mg/dL)\n'}
+                    {'{{trend}}\nup / down / steady\n'}
+                    {'{{time}}\nwhen you tapped Send\n'}
+                    {'{{coordinates}}\nlatitude and longitude together (decimal degrees)'}
                   </Text>
+                  <Pressable
+                    onPress={() => setMessageTemplate(DEFAULT_TEMPLATE)}
+                    style={({ pressed }) => [styles.useDefaultLink, pressed && styles.useDefaultLinkPressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Replace message with default multi-line template"
+                  >
+                    <Text style={styles.useDefaultLinkText}>Use default layout</Text>
+                  </Pressable>
                   <TextInput
                     value={messageTemplate}
                     onChangeText={setMessageTemplate}
-                    placeholder={DEFAULT_TEMPLATE}
+                    placeholder="Write your message here. Use {{glucose}} and other codes where you want live values."
                     placeholderTextColor="#94a3b8"
-                    style={[styles.modalInput, styles.modalTextArea]}
+                    style={styles.modalMessageTemplateInput}
                     multiline
+                    scrollEnabled
+                    textAlignVertical="top"
+                    autoCorrect
+                    spellCheck
                   />
 
                   <Pressable
@@ -432,16 +547,57 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     lineHeight: 22,
   },
-  btnPrimary: {
-    marginTop: 4,
-    backgroundColor: '#0284c7',
-    paddingVertical: 14,
-    borderRadius: 12,
+  /** Fills remaining scroll height so the send control sits centered on screen below the card. */
+  sendCircleArea: {
+    flexGrow: 1,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 16,
+  },
+  /** Negative margin nudges the bubble upward vs true vertical center of `sendCircleArea`. */
+  sendBubbleOuter: {
+    alignItems: 'center',
+    marginTop: -100,
+  },
+  sendBubblePress: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBubbleFrame: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  sendBubbleImage: {
+    position: 'absolute',
+    left: 6,
+    top: 0,
+  },
+  sendBubbleTextShell: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingVertical: 24,
+  },
+  sendBubbleText: {
+    textAlign: 'center',
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+    lineHeight: 22,
+    letterSpacing: -0.2,
+    textShadowColor: 'rgba(255,255,255,0.75)',
+    textShadowOffset: { width: 0, height: 0.5 },
+    textShadowRadius: 6,
   },
   btnPressed: { opacity: 0.88 },
   btnDisabled: { opacity: 0.55 },
-  btnPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   modalRoot: { flex: 1 },
   modalOverlay: {
     flex: 1,
@@ -538,9 +694,36 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     backgroundColor: '#fff',
   },
-  modalTextArea: {
-    minHeight: 100,
+  /** Multiline: explicit lineHeight avoids lines drawing on top of each other (esp. iOS). */
+  modalMessageTemplateInput: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '500',
+    color: '#0f172a',
+    backgroundColor: '#fff',
+    minHeight: 280,
     textAlignVertical: 'top',
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : {}),
+  },
+  useDefaultLink: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  useDefaultLinkPressed: { opacity: 0.75 },
+  useDefaultLinkText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0284c7',
+    textDecorationLine: 'underline',
   },
   modalSaveBtn: {
     marginTop: 16,
