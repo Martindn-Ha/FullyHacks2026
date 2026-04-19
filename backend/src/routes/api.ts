@@ -10,7 +10,10 @@ import {
 import { synthesizeGuidanceWithGemini } from '../services/llmGuidanceSynthesis.js';
 import { rankFoodRecommendations } from '../services/recommendationEngine.js';
 import { IntegrationError } from '../services/integrationError.js';
-import { tryReadClarityDemoCsv } from '../services/clarityDemoCsv.js';
+import {
+  tryReadClarityDemoCsv,
+  type ClarityDemoDataset,
+} from '../services/clarityDemoCsv.js';
 
 export const apiRouter = express.Router();
 
@@ -68,10 +71,15 @@ function integrationResponse(res: express.Response, err: unknown, route: string)
 }
 
 /** Raw Clarity / Stelo-style CSV from repo `dummydata/` for the mobile simulator graph (optional). */
-apiRouter.get('/clarity-demo', (_req, res) => {
-  const raw = tryReadClarityDemoCsv();
+apiRouter.get('/clarity-demo', (req, res) => {
+  const q = typeof req.query.dataset === 'string' ? req.query.dataset.trim().toLowerCase() : '';
+  const dataset: ClarityDemoDataset = q === 'diabetic' ? 'diabetic' : 'nondiabetic';
+  const raw = tryReadClarityDemoCsv(dataset);
   if (!raw) {
-    return res.status(404).type('text/plain').send('No CSV found in dummydata/.');
+    return res
+      .status(404)
+      .type('text/plain')
+      .send(`No demo CSV for dataset=${dataset} in dummydata/ (expected file for this mode).`);
   }
   res.type('text/csv; charset=utf-8').send(raw);
 });

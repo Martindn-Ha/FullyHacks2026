@@ -6,14 +6,17 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
-import { fetchClarityDemoCsv, fetchRecommendations, getApiBaseUrl, type ActivityLevel } from './src/api';
+import {
+  fetchClarityDemoCsv,
+  fetchRecommendations,
+  type ClarityDemoDataset,
+} from './src/api';
 import { buildSyntheticClarityCsv, parseClarityExportCsv, type GlucosePoint } from './src/clarity/parseClarityExport';
 import {
   CGM_SPEED_PRESETS,
@@ -28,11 +31,12 @@ export default function App() {
   const chartW = Math.max(220, winW - 36 - 28);
 
   const [glucosePoints, setGlucosePoints] = useState<GlucosePoint[]>([]);
+  const [demoGlucoseDataset, setDemoGlucoseDataset] = useState<ClarityDemoDataset>('nondiabetic');
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const raw = await fetchClarityDemoCsv();
+      const raw = await fetchClarityDemoCsv(demoGlucoseDataset);
       const text = raw ?? buildSyntheticClarityCsv();
       const pts = parseClarityExportCsv(text);
       if (cancelled) return;
@@ -42,42 +46,22 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [demoGlucoseDataset]);
 
   const [timeCompression, setTimeCompression] = useState(DEFAULT_TIME_COMPRESSION);
   const { playbackT, displayMgdl, trend } = useSimulatedCgmPlayback(glucosePoints, {
     timeCompression,
   });
 
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [symptoms, setSymptoms] = useState('');
-  const [glucoseOverride, setGlucoseOverride] = useState('');
-  const [minutesSinceMeal, setMinutesSinceMeal] = useState('');
-  const [mealCarbs, setMealCarbs] = useState('');
-  const [medsOnTime, setMedsOnTime] = useState(true);
-  const [activity, setActivity] = useState<ActivityLevel>('moderate');
+  const [showChartSettings, setShowChartSettings] = useState(false);
   const [lat, setLat] = useState('33.8823');
   const [lng, setLng] = useState('-117.8851');
   const [loading, setLoading] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
-  const symptomList = useMemo(
-    () =>
-      symptoms
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    [symptoms],
-  );
-
-  const effectiveGlucose = useMemo(() => {
-    if (showAdvanced && glucoseOverride.trim()) {
-      const n = Number(glucoseOverride);
-      if (Number.isFinite(n) && n > 0) return Math.round(n);
-    }
-    return displayMgdl;
-  }, [showAdvanced, glucoseOverride, displayMgdl]);
+  /** Green band matches demo cohort: diabetic CSV → 70–180; non-diabetic export → 70–140. */
+  const targetBandHigh = demoGlucoseDataset === 'diabetic' ? 180 : 140;
 
   async function useDeviceLocation() {
     const permission = await Location.requestForegroundPermissionsAsync();
@@ -103,13 +87,13 @@ export default function App() {
     setResultText(null);
     try {
       const data = await fetchRecommendations({
-        symptoms: symptomList,
-        recentGlucoseMgDl: effectiveGlucose,
+        symptoms: [],
+        recentGlucoseMgDl: displayMgdl,
         glucoseTrend: trend,
-        minutesSinceLastMeal: minutesSinceMeal.trim() ? Number(minutesSinceMeal) : undefined,
-        lastMealCarbsG: mealCarbs.trim() ? Number(mealCarbs) : undefined,
-        medicationOnSchedule: medsOnTime,
-        activityLevel: activity,
+        minutesSinceLastMeal: undefined,
+        lastMealCarbsG: undefined,
+        medicationOnSchedule: true,
+        activityLevel: 'moderate',
         latitude,
         longitude,
       });
@@ -175,7 +159,7 @@ export default function App() {
         <View style={styles.cgmCard}>
           <View style={styles.cgmTopRow}>
             <View>
-              <Text style={styles.cgmValue}>{effectiveGlucose}</Text>
+              <Text style={styles.cgmValue}>{displayMgdl}</Text>
               <Text style={styles.cgmUnit}>mg/dL · {trend}</Text>
             </View>
             <View style={styles.cgmMeta}>
@@ -183,109 +167,91 @@ export default function App() {
             </View>
           </View>
           {glucosePoints.length >= 8 ? (
-            <GlucoseStripChart points={glucosePoints} playbackT={playbackT} width={chartW} height={172} />
+            <GlucoseStripChart
+              points={glucosePoints}
+              playbackT={playbackT}
+              width={chartW}
+              height={172}
+              targetBandLow={70}
+              targetBandHigh={targetBandHigh}
+              demoGlucoseDataset={demoGlucoseDataset}
+            />
           ) : (
             <Text style={styles.cgmLoading}>Preparing graph…</Text>
           )}
-
-          <Text style={styles.speedLabel}>Graph speed</Text>
-          <View style={styles.speedPresets}>
-            {CGM_SPEED_PRESETS.map((p) => {
-              const on = timeCompression === p.compression;
-              return (
-                <Pressable
-                  key={p.label}
-                  onPress={() => setTimeCompression(p.compression)}
-                  style={[styles.speedChip, on && styles.speedChipOn]}
-                >
-                  <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <View style={styles.speedFineRow}>
-            <Pressable
-              onPress={() => setTimeCompression((c) => Math.max(2, Math.round(c / 1.12)))}
-              style={styles.speedFineBtn}
-            >
-              <Text style={styles.speedFineBtnText}>Slower −</Text>
-            </Pressable>
-            <Text style={styles.speedFineValue}>{timeCompression}×</Text>
-            <Pressable
-              onPress={() => setTimeCompression((c) => Math.min(2500, Math.round(c * 1.12)))}
-              style={styles.speedFineBtn}
-            >
-              <Text style={styles.speedFineBtnText}>Faster +</Text>
-            </Pressable>
-          </View>
         </View>
 
-        <Pressable onPress={() => setShowAdvanced((s) => !s)} style={styles.advancedToggle}>
-          <Text style={styles.advancedToggleText}>{showAdvanced ? 'Hide advanced' : 'Advanced (optional)'}</Text>
+        <Pressable onPress={() => setShowChartSettings((s) => !s)} style={styles.advancedToggle}>
+          <Text style={styles.advancedToggleText}>
+            {showChartSettings ? 'Hide Demo settings' : 'Demo settings'}
+          </Text>
         </Pressable>
 
-        {showAdvanced ? (
+        {showChartSettings ? (
           <>
-            <Text style={styles.label}>Symptoms (comma-separated)</Text>
-            <TextInput
-              value={symptoms}
-              onChangeText={setSymptoms}
-              placeholder="e.g. mild headache"
-              style={styles.input}
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.label}>Override glucose (mg/dL), optional</Text>
-            <TextInput
-              value={glucoseOverride}
-              onChangeText={setGlucoseOverride}
-              placeholder={`Leave blank to use live value (${displayMgdl})`}
-              style={styles.input}
-              keyboardType="number-pad"
-            />
-
-            <Text style={styles.label}>Minutes since last meal (optional)</Text>
-            <TextInput
-              value={minutesSinceMeal}
-              onChangeText={setMinutesSinceMeal}
-              placeholder="e.g. 30"
-              style={styles.input}
-              keyboardType="number-pad"
-            />
-
-            <Text style={styles.label}>Last meal carbs (g), optional</Text>
-            <TextInput
-              value={mealCarbs}
-              onChangeText={setMealCarbs}
-              placeholder="e.g. 60"
-              style={styles.input}
-              keyboardType="number-pad"
-            />
-
-            <View style={styles.switchRow}>
-              <Text style={styles.labelInline}>Medication on schedule</Text>
-              <Switch value={medsOnTime} onValueChange={setMedsOnTime} />
+            <Text style={styles.speedLabel}>Graph speed</Text>
+            <View style={styles.speedPresets}>
+              {CGM_SPEED_PRESETS.map((p) => {
+                const on = timeCompression === p.compression;
+                return (
+                  <Pressable
+                    key={p.label}
+                    onPress={() => setTimeCompression(p.compression)}
+                    style={[styles.speedChip, on && styles.speedChipOn]}
+                  >
+                    <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.speedFineRow}>
+              <Pressable
+                onPress={() => setTimeCompression((c) => Math.max(2, Math.round(c / 1.12)))}
+                style={styles.speedFineBtn}
+              >
+                <Text style={styles.speedFineBtnText}>Slower −</Text>
+              </Pressable>
+              <Text style={styles.speedFineValue}>{timeCompression}×</Text>
+              <Pressable
+                onPress={() => setTimeCompression((c) => Math.min(2500, Math.round(c * 1.12)))}
+                style={styles.speedFineBtn}
+              >
+                <Text style={styles.speedFineBtnText}>Faster +</Text>
+              </Pressable>
             </View>
 
-            <Text style={styles.label}>Activity level</Text>
-            <View style={styles.row}>
-              {(['low', 'moderate', 'high'] as const).map((a) => (
-                <Pressable key={a} onPress={() => setActivity(a)} style={[styles.chip, activity === a && styles.chipOn]}>
-                  <Text style={[styles.chipText, activity === a && styles.chipTextOn]}>{a}</Text>
-                </Pressable>
-              ))}
+            <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
+            <View style={styles.speedPresets}>
+              <Pressable
+                onPress={() => setDemoGlucoseDataset('nondiabetic')}
+                style={[styles.speedChip, demoGlucoseDataset === 'nondiabetic' && styles.speedChipOn]}
+              >
+                <Text
+                  style={[styles.speedChipText, demoGlucoseDataset === 'nondiabetic' && styles.speedChipTextOn]}
+                >
+                  Non-diabetic · 70–140
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setDemoGlucoseDataset('diabetic')}
+                style={[styles.speedChip, demoGlucoseDataset === 'diabetic' && styles.speedChipOn]}
+              >
+                <Text style={[styles.speedChipText, demoGlucoseDataset === 'diabetic' && styles.speedChipTextOn]}>
+                  Diabetic · 70–180
+                </Text>
+              </Pressable>
             </View>
+
+            <Text style={styles.label}>Location</Text>
+            <View style={styles.locRow}>
+              <TextInput value={lat} onChangeText={setLat} style={[styles.input, styles.locInput]} keyboardType="numbers-and-punctuation" />
+              <TextInput value={lng} onChangeText={setLng} style={[styles.input, styles.locInput]} keyboardType="numbers-and-punctuation" />
+            </View>
+            <Pressable onPress={useDeviceLocation} style={styles.secondaryBtn}>
+              <Text style={styles.secondaryBtnText}>Use device location</Text>
+            </Pressable>
           </>
         ) : null}
-
-        <Text style={styles.label}>Location</Text>
-        <View style={styles.locRow}>
-          <TextInput value={lat} onChangeText={setLat} style={[styles.input, styles.locInput]} keyboardType="numbers-and-punctuation" />
-          <TextInput value={lng} onChangeText={setLng} style={[styles.input, styles.locInput]} keyboardType="numbers-and-punctuation" />
-        </View>
-        <Pressable onPress={useDeviceLocation} style={styles.secondaryBtn}>
-          <Text style={styles.secondaryBtnText}>Use device location</Text>
-        </Pressable>
 
         <Pressable onPress={onRecommend} style={styles.primaryBtn} disabled={loading}>
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Get recommendations</Text>}
@@ -368,7 +334,6 @@ const styles = StyleSheet.create({
   advancedToggle: { alignSelf: 'flex-start', marginTop: 4, paddingVertical: 8 },
   advancedToggleText: { color: '#1f6feb', fontWeight: '700', fontSize: 14 },
   label: { marginTop: 10, fontSize: 13, fontWeight: '600', color: '#22324d' },
-  labelInline: { fontSize: 13, fontWeight: '600', color: '#22324d' },
   input: {
     marginTop: 6,
     borderWidth: 1,
@@ -380,19 +345,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#0b1f3a',
   },
-  row: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
-  chip: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#c9d4e8',
-    backgroundColor: '#fff',
-  },
-  chipOn: { backgroundColor: '#1f6feb', borderColor: '#1f6feb' },
-  chipText: { color: '#22324d', fontWeight: '600', textTransform: 'capitalize' },
-  chipTextOn: { color: '#fff' },
-  switchRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   locRow: { flexDirection: 'row', gap: 8 },
   locInput: { flex: 1 },
   secondaryBtn: {

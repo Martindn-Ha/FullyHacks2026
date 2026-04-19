@@ -9,9 +9,11 @@ export function getApiBaseUrl(): string {
   return baseUrl;
 }
 
+export type ClarityDemoDataset = 'nondiabetic' | 'diabetic';
+
 /** Optional: raw Clarity / Stelo CSV from backend `dummydata/` for the CGM-style graph. */
-export async function fetchClarityDemoCsv(): Promise<string | null> {
-  const url = `${baseUrl.replace(/\/$/, '')}/api/clarity-demo`;
+export async function fetchClarityDemoCsv(dataset: ClarityDemoDataset = 'nondiabetic'): Promise<string | null> {
+  const url = `${baseUrl.replace(/\/$/, '')}/api/clarity-demo?dataset=${encodeURIComponent(dataset)}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
