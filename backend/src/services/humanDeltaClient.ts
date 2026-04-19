@@ -136,6 +136,12 @@ export async function retrieveMenuGuidance(params: {
 
   const rawText = await res.text();
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      console.warn(
+        `[humanDeltaClient] Human Delta HTTP ${res.status} (auth). ${rawText.slice(0, 200)} — using generic venue guidance. Fix HUMAN_DELTA_API_KEY or clear HUMAN_DELTA_API_URL to skip Human Delta.`,
+      );
+      return buildInvalidHumanDeltaKeyFallback(places);
+    }
     throw new IntegrationError(
       `Human Delta returned HTTP ${res.status}: ${rawText.slice(0, 800)}`,
       502,
@@ -368,6 +374,21 @@ export function buildHumanDeltaEmptyFallbackGuidance(places: PlaceCandidate[]): 
         source: 'human_delta_empty',
         text:
           `Human Delta search returned no indexed documents for "${p.name}" yet. Use Google place_id ${p.id} to find official menus or nutrition PDFs and add them to your Human Delta corpus. Until then: prefer grilled protein, salads with dressing on the side, vegetables, and water or unsweetened drinks; limit sugary sauces and large refined-starch portions.`,
+      },
+    ],
+  }));
+}
+
+/** When Human Delta rejects the key: same shape as placeholder so Gemini + ranking still run. */
+export function buildInvalidHumanDeltaKeyFallback(places: PlaceCandidate[]): PlaceGuidanceRow[] {
+  return places.map((p) => ({
+    placeId: p.id,
+    placeName: p.name,
+    passages: [
+      {
+        source: 'human_delta_key_invalid',
+        text:
+          `Human Delta rejected the API key (invalid or revoked). For "${p.name}", prefer grilled protein, salads with dressing on the side, vegetables, and unsweetened drinks; limit sugary sauces and large refined-starch portions.`,
       },
     ],
   }));

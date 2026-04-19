@@ -15,6 +15,35 @@ import { fetchClarityDemoCsv, fetchRecommendations, fetchSpikeRisk, type Clarity
 import { buildSyntheticClarityCsv, parseClarityExportCsv, type GlucosePoint } from '../clarity/parseClarityExport';
 import { DEFAULT_TIME_COMPRESSION, useSimulatedCgmPlayback } from '../clarity/useSimulatedCgmPlayback';
 
+/** When predicted max (purple / Ridge) exceeds this, auto-run device location + recommendations once until it drops. */
+const AUTO_RECS_PREDICTED_MAX_MG_DL = 180;
+/** Prediction must stay at/below threshold at least this long before a new high can trigger auto recommendations (ignores brief dips). */
+const AUTO_RECS_MIN_BELOW_THRESHOLD_MS = 5 * 60 * 1000;
+
+function isFiniteLatLng(o: unknown): o is { latitude: number; longitude: number } {
+  if (!o || typeof o !== 'object') return false;
+  const lat = Number((o as { latitude?: unknown }).latitude);
+  const lng = Number((o as { longitude?: unknown }).longitude);
+  return Number.isFinite(lat) && Number.isFinite(lng);
+}
+
+export type RecommendationPickVm = {
+  placeName: string;
+  distanceM: number;
+  suggestedItem: string;
+  explanation: string;
+  nutritionInfo?: string;
+  groundedNote?: string;
+};
+
+/** Structured last `/api/recommendations` payload for richer UI (still mirrored in `resultText`). */
+export type RecommendationResultsVm = {
+  updatedAt: string;
+  risk: { riskScore: number; severity: string; factors: string[] } | null;
+  picks: RecommendationPickVm[];
+  note?: string;
+};
+
 type CgmSessionContextValue = {
   glucosePoints: GlucosePoint[];
   demoGlucoseDataset: ClarityDemoDataset;
@@ -30,9 +59,12 @@ type CgmSessionContextValue = {
   setLng: (s: string) => void;
   loading: boolean;
   resultText: string | null;
+  /** Last successful recommendations response shape; null after errors, escalation, or before first fetch. */
+  recommendationResults: RecommendationResultsVm | null;
   recommendationsScrollRef: RefObject<ScrollView | null>;
   useDeviceLocation: () => Promise<void>;
-  requestRecommendations: () => Promise<void>;
+  /** Optional coords skip reading `lat`/`lng` strings (e.g. immediately after GPS). */
+  requestRecommendations: (coordsOverride?: { latitude: number; longitude: number }) => Promise<boolean>;
   /** ML model: Ridge regression on 5-minute features (`ml_model/`) via backend; band tint uses a 0–1 score vs threshold. */
   mlSpikeReady: boolean;
   mlSpikeProbability: number | null;
@@ -73,6 +105,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const [lng, setLng] = useState('-117.8851');
   const [loading, setLoading] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
+  const [recommendationResults, setRecommendationResults] = useState<RecommendationResultsVm | null>(null);
   const [mlSpikeReady, setMlSpikeReady] = useState(false);
   const [mlSpikeProbability, setMlSpikeProbability] = useState<number | null>(null);
   const [mlPredictedMaxMgDl, setMlPredictedMaxMgDl] = useState<number | null>(null);
@@ -80,6 +113,9 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const [mlSpikeHorizonMinutes, setMlSpikeHorizonMinutes] = useState<number | null>(null);
   const [mlSpikeNote, setMlSpikeNote] = useState<string | null>(null);
   const recommendationsScrollRef = useRef<ScrollView>(null);
+  const autoRecsFromPredictionLatchRef = useRef(false);
+  /** When latched, first time we see pred ≤ threshold; used to require sustained “low” before re-arming. */
+  const dipBelowThresholdSinceMsRef = useRef<number | null>(null);
 
   /** `playbackT` updates every frame during replay; do not put it in effect deps or the debounce never fires. */
   const playbackTRef = useRef(playbackT);
@@ -203,16 +239,18 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
     setLng(String(pos.coords.longitude));
   }, []);
 
-  const requestRecommendations = useCallback(async () => {
-    const latitude = Number(lat);
-    const longitude = Number(lng);
+  const requestRecommendations = useCallback(
+    async (coordsOverride?: { latitude: number; longitude: number }): Promise<boolean> => {
+    const latitude = isFiniteLatLng(coordsOverride) ? coordsOverride.latitude : Number(lat);
+    const longitude = isFiniteLatLng(coordsOverride) ? coordsOverride.longitude : Number(lng);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       Alert.alert('Location', 'Enter valid latitude and longitude, or use device location.');
-      return;
+      return false;
     }
 
     setLoading(true);
     setResultText(null);
+    setRecommendationResults(null);
     try {
       const data = await fetchRecommendations({
         symptoms: [],
@@ -227,8 +265,9 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       });
 
       if (data.safety.escalate) {
+        setRecommendationResults(null);
         setResultText(data.escalationMessage ?? data.safety.message ?? 'Escalation triggered.');
-        return;
+        return true;
       }
 
       const risk = data.risk;
@@ -249,17 +288,109 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       const stamp = new Date().toLocaleString();
       const noteBlock = note ? `\n\n${note}\n` : '';
       setResultText(`Updated: ${stamp}\n\n${header}\n\nTop picks:\n${recs || '(none)'}${noteBlock}`);
+      setRecommendationResults({
+        updatedAt: stamp,
+        risk: risk
+          ? {
+              riskScore: risk.riskScore,
+              severity: risk.severity,
+              factors: [...risk.factors],
+            }
+          : null,
+        picks: data.recommendations.map((r) => ({
+          placeName: r.place.name,
+          distanceM: r.place.distanceM,
+          suggestedItem: r.suggestedItem,
+          explanation: r.explanation,
+          nutritionInfo: r.nutritionInfo?.trim() || undefined,
+          groundedNote: r.groundedNote?.trim() || undefined,
+        })),
+        note: note || undefined,
+      });
       setTimeout(() => recommendationsScrollRef.current?.scrollToEnd({ animated: true }), 150);
+      return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       console.error('[recommendations]', message);
+      setRecommendationResults(null);
       setResultText(
         `Could not reach the API.\n\n${message}\n\nBackend (on your Mac):\n  cd backend && npm run dev`,
       );
+      return false;
     } finally {
       setLoading(false);
     }
-  }, [lat, lng, displayMgdl, trend]);
+  },
+  [lat, lng, displayMgdl, trend],
+);
+
+  /**
+   * Predicted max > 180 → foreground location + recommendations (once per high episode).
+   * Must stay ≤ threshold for `AUTO_RECS_MIN_BELOW_THRESHOLD_MS` before re-arming; a short dip then spike does not re-trigger.
+   * `playbackT` is in deps so duration is re-evaluated during CGM replay.
+   */
+  useEffect(() => {
+    const pred = mlPredictedMaxMgDl;
+    const predOk = pred != null && Number.isFinite(pred);
+
+    const resetEpisode = () => {
+      autoRecsFromPredictionLatchRef.current = false;
+      dipBelowThresholdSinceMsRef.current = null;
+    };
+
+    if (!mlSpikeReady || !predOk) {
+      if (!predOk || pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
+        resetEpisode();
+      }
+      return;
+    }
+
+    if (pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
+      if (autoRecsFromPredictionLatchRef.current) {
+        if (dipBelowThresholdSinceMsRef.current == null) {
+          dipBelowThresholdSinceMsRef.current = Date.now();
+        } else if (Date.now() - dipBelowThresholdSinceMsRef.current >= AUTO_RECS_MIN_BELOW_THRESHOLD_MS) {
+          resetEpisode();
+        }
+      } else {
+        dipBelowThresholdSinceMsRef.current = null;
+      }
+      return;
+    }
+
+    if (dipBelowThresholdSinceMsRef.current != null) {
+      const dipMs = Date.now() - dipBelowThresholdSinceMsRef.current;
+      dipBelowThresholdSinceMsRef.current = null;
+      if (dipMs < AUTO_RECS_MIN_BELOW_THRESHOLD_MS && autoRecsFromPredictionLatchRef.current) {
+        return;
+      }
+    }
+
+    if (autoRecsFromPredictionLatchRef.current) return;
+    autoRecsFromPredictionLatchRef.current = true;
+
+    void (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== 'granted') {
+          resetEpisode();
+          return;
+        }
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const latitude = pos.coords.latitude;
+        const longitude = pos.coords.longitude;
+        setLat(String(latitude));
+        setLng(String(longitude));
+        const ok = await requestRecommendations({ latitude, longitude });
+        if (!ok) {
+          resetEpisode();
+        }
+      } catch (e) {
+        console.error('[auto-recs prediction]', e);
+        resetEpisode();
+      }
+    })();
+  }, [mlSpikeReady, mlPredictedMaxMgDl, requestRecommendations, playbackT]);
 
   const value = useMemo(
     () =>
@@ -278,6 +409,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         setLng,
         loading,
         resultText,
+        recommendationResults,
         recommendationsScrollRef,
         useDeviceLocation,
         requestRecommendations,
@@ -299,6 +431,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       lng,
       loading,
       resultText,
+      recommendationResults,
       mlSpikeReady,
       mlSpikeProbability,
       mlPredictedMaxMgDl,

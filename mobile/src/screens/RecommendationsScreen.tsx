@@ -1,7 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   ImageBackground,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,12 +14,154 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCgmSession } from '../context/CgmSessionContext';
+import { useCgmSession, type RecommendationPickVm, type RecommendationResultsVm } from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
 
+function severityVisual(sev: string): { label: string; bg: string; fg: string; border: string } {
+  const s = sev.toLowerCase();
+  if (s === 'high') {
+    return { label: 'High', bg: '#fff1f2', fg: '#9f1239', border: '#fecdd3' };
+  }
+  if (s === 'moderate') {
+    return { label: 'Moderate', bg: '#fffbeb', fg: '#b45309', border: '#fde68a' };
+  }
+  return { label: 'Low', bg: '#f8fafc', fg: '#475569', border: '#e2e8f0' };
+}
+
+function RiskPanel({ risk }: { risk: RecommendationResultsVm['risk'] }) {
+  if (!risk) {
+    return (
+      <View style={[styles.panel, styles.panelMuted]}>
+        <Text style={styles.panelTitle}>Risk</Text>
+        <Text style={styles.mutedLine}>Not available for this response.</Text>
+      </View>
+    );
+  }
+  const sev = severityVisual(risk.severity);
+  return (
+    <View style={[styles.panel, styles.riskPanel]}>
+      <View style={styles.riskHeaderRow}>
+        <Text style={styles.panelTitle}>Near-term spike risk</Text>
+        <View style={[styles.severityPill, { backgroundColor: sev.bg, borderColor: sev.border }]}>
+          <Text style={[styles.severityPillText, { color: sev.fg }]}>{sev.label}</Text>
+        </View>
+      </View>
+      <Text style={styles.riskScoreLine}>
+        <Text style={styles.riskScoreValue}>{risk.riskScore.toFixed(2)}</Text>
+        <Text style={styles.riskScoreSuffix}> / 1.00</Text>
+      </Text>
+      {risk.factors?.length ? (
+        <View style={styles.factorList}>
+          {risk.factors.map((f, i) => (
+            <View key={`f-${i}`} style={styles.factorRow}>
+              <Text style={styles.factorBullet}>·</Text>
+              <Text style={styles.factorText}>{f}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function PickCard({ pick, index }: { pick: RecommendationPickVm; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <Pressable
+      onPress={() => setExpanded((e) => !e)}
+      style={({ pressed }) => [styles.pickCard, pressed && styles.pickCardPressed]}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      accessibilityLabel={`${pick.placeName}, ${Math.round(pick.distanceM)} meters away. ${expanded ? 'Expanded' : 'Collapsed'}. Double tap to ${expanded ? 'collapse' : 'expand'}.`}
+    >
+      <View style={styles.pickCardSummaryRow}>
+        <View style={styles.pickSummaryMain}>
+          <View style={styles.pickNameWrap}>
+            <Text style={styles.pickPlaceName} numberOfLines={2}>
+              {pick.placeName}
+            </Text>
+          </View>
+          <View style={styles.distanceChip}>
+            <Text style={styles.distanceChipText}>{Math.round(pick.distanceM)} m</Text>
+          </View>
+        </View>
+        <View style={styles.expandChevronWrap} accessibilityElementsHidden>
+          <Text style={styles.expandChevron}>{expanded ? '▼' : '›'}</Text>
+        </View>
+      </View>
+
+      {expanded ? (
+        <View style={styles.pickCardExpanded}>
+          <View style={styles.pickCardHeader}>
+            <View style={styles.pickIndexWrap}>
+              <Text style={styles.pickIndexText}>{index + 1}</Text>
+            </View>
+            <Text style={styles.expandedSectionHint}>Pick & reasoning</Text>
+          </View>
+          <View style={styles.suggestedBox}>
+            <Text style={styles.suggestedLabel}>Pick</Text>
+            <Text style={styles.suggestedItem}>{pick.suggestedItem}</Text>
+            {pick.nutritionInfo ? (
+              <Text style={styles.nutritionLine}>{pick.nutritionInfo}</Text>
+            ) : null}
+          </View>
+          <View>
+            <Text style={styles.reasoningLabel}>Reasoning</Text>
+            <Text style={styles.explanation}>{pick.explanation}</Text>
+          </View>
+          {pick.groundedNote ? (
+            <View style={styles.groundedBox}>
+              <Text style={styles.groundedLabel}>From menus / index</Text>
+              <Text style={styles.groundedText}>{pick.groundedNote}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function StructuredResults({ data }: { data: RecommendationResultsVm }) {
+  return (
+    <View style={styles.resultsBlock}>
+      <Text style={styles.updatedAt}>Updated {data.updatedAt}</Text>
+      <RiskPanel risk={data.risk} />
+      {data.note ? (
+        <View style={styles.noteBanner}>
+          <Text style={styles.noteBannerText}>{data.note}</Text>
+        </View>
+      ) : null}
+      <Text style={styles.sectionHeading}>Meal ideas</Text>
+      {data.picks.length === 0 ? (
+        <View style={[styles.panel, styles.panelMuted]}>
+          <Text style={styles.mutedLine}>No restaurant picks for this run (e.g. low-risk gate).</Text>
+        </View>
+      ) : (
+        <View style={styles.pickList}>
+          {data.picks.map((p, i) => (
+            <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function FallbackResultCard({ text }: { text: string }) {
+  const isErrorish = /could not reach|error|escalat|invalid|failed/i.test(text.slice(0, 80));
+  return (
+    <View style={[styles.panel, isErrorish ? styles.panelWarn : styles.panelMuted]}>
+      <Text style={styles.panelTitle}>{isErrorish ? 'Message' : 'Results'}</Text>
+      <Text style={styles.fallbackBody}>{text}</Text>
+    </View>
+  );
+}
+
 export function RecommendationsScreen() {
   const insets = useSafeAreaInsets();
+  const [demoSettingsOpen, setDemoSettingsOpen] = useState(false);
   const {
     displayMgdl,
     trend,
@@ -25,10 +171,14 @@ export function RecommendationsScreen() {
     setLng,
     loading,
     resultText,
+    recommendationResults,
     recommendationsScrollRef,
     useDeviceLocation,
     requestRecommendations,
   } = useCgmSession();
+
+  const showStructured = recommendationResults != null;
+  const showFallback = !showStructured && resultText != null;
 
   return (
     <ImageBackground
@@ -43,47 +193,109 @@ export function RecommendationsScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Recommendations</Text>
+        <View style={styles.titleRow}>
+          <Text style={[styles.title, styles.titleInRow]} numberOfLines={1}>
+            Recommendations
+          </Text>
+          <Pressable
+            onPress={() => setDemoSettingsOpen(true)}
+            style={({ pressed }) => [styles.demoSettingsBtn, pressed && styles.demoSettingsBtnPressed]}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Open demo settings"
+          >
+            <Text style={styles.demoSettingsBtnText}>Demo settings</Text>
+          </Pressable>
+        </View>
         <Text style={styles.subtitle}>
-          Uses live demo glucose: <Text style={styles.subtitleStrong}>{displayMgdl}</Text> mg/dL · {trend}
+          Live demo glucose <Text style={styles.subtitleStrong}>{displayMgdl}</Text> mg/dL · {trend}
         </Text>
 
-        <Text style={styles.label}>Location</Text>
-        <View style={styles.locRow}>
-          <TextInput
-            value={lat}
-            onChangeText={setLat}
-            style={[styles.input, styles.locInput]}
-            keyboardType="numbers-and-punctuation"
-          />
-          <TextInput
-            value={lng}
-            onChangeText={setLng}
-            style={[styles.input, styles.locInput]}
-            keyboardType="numbers-and-punctuation"
-          />
-        </View>
-        <Pressable onPress={useDeviceLocation} style={styles.secondaryBtn}>
-          <Text style={styles.secondaryBtnText}>Use device location</Text>
-        </Pressable>
-
-        <Pressable onPress={requestRecommendations} style={styles.primaryBtn} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Get recommendations</Text>}
-        </Pressable>
-        {loading ? (
-          <Text style={styles.loadingHint}>
-            Calling your backend (nearby places and meal suggestions). This can take up to a couple of minutes the first
-            time — scroll down for results when the spinner stops.
-          </Text>
-        ) : null}
-
-        {resultText ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Results</Text>
-            <Text style={styles.cardBody}>{resultText}</Text>
-          </View>
-        ) : null}
+        {showStructured ? <StructuredResults data={recommendationResults} /> : null}
+        {showFallback ? <FallbackResultCard text={resultText} /> : null}
       </ScrollView>
+
+      <Modal
+        visible={demoSettingsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setDemoSettingsOpen(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={[styles.modalOverlay, { paddingTop: insets.top + 12 }]}>
+            <Pressable
+              style={styles.modalBackdrop}
+              onPress={() => setDemoSettingsOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close demo settings"
+            />
+            <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+                style={styles.modalScroll}
+              >
+                <Text style={styles.modalTitle}>Demo settings</Text>
+                <Text style={styles.modalSubtitle}>Location and actions for this recommendations demo.</Text>
+
+                <View style={[styles.controlsCard, styles.modalControlsCard]}>
+                  <Text style={styles.controlsLabel}>Location</Text>
+                  <View style={styles.locRow}>
+                    <TextInput
+                      value={lat}
+                      onChangeText={setLat}
+                      style={[styles.input, styles.locInput]}
+                      keyboardType="numbers-and-punctuation"
+                      placeholder="Lat"
+                      placeholderTextColor="#94a3b8"
+                    />
+                    <TextInput
+                      value={lng}
+                      onChangeText={setLng}
+                      style={[styles.input, styles.locInput]}
+                      keyboardType="numbers-and-punctuation"
+                      placeholder="Lng"
+                      placeholderTextColor="#94a3b8"
+                    />
+                  </View>
+                  <Pressable onPress={useDeviceLocation} style={styles.secondaryBtn}>
+                    <Text style={styles.secondaryBtnText}>Use device location</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void requestRecommendations()}
+                    style={styles.primaryBtn}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.primaryBtnText}>Get recommendations</Text>
+                    )}
+                  </Pressable>
+                  {loading ? (
+                    <Text style={styles.loadingHint}>
+                      Nearby places + Gemini meal ideas. First run can take a minute — results appear below.
+                    </Text>
+                  ) : null}
+                </View>
+
+                <Pressable
+                  onPress={() => setDemoSettingsOpen(false)}
+                  style={({ pressed }) => [styles.modalDoneBtn, pressed && styles.modalDoneBtnPressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Done"
+                >
+                  <Text style={styles.modalDoneText}>Done</Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ImageBackground>
   );
 }
@@ -92,63 +304,275 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   scrollView: { flex: 1, backgroundColor: 'transparent' },
   scrollContent: {
-    paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 24,
-    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 32,
+    gap: 0,
     flexGrow: 1,
   },
-  title: { fontSize: 20, fontWeight: '800', color: '#000000', letterSpacing: -0.3 },
-  subtitle: { fontSize: 13, fontWeight: '600', color: '#0b1f3a', lineHeight: 18 },
-  subtitleStrong: { fontWeight: '800' },
-  label: { marginTop: 10, fontSize: 13, fontWeight: '600', color: '#000000' },
-  input: {
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: '#d7deea',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: '#0b1f3a',
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
   },
-  locRow: { flexDirection: 'row', gap: 8 },
+  titleInRow: { flex: 1, minWidth: 0 },
+  title: { fontSize: 26, fontWeight: '800', color: '#020617', letterSpacing: -0.6 },
+  demoSettingsBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.95)',
+  },
+  demoSettingsBtnPressed: { opacity: 0.88 },
+  demoSettingsBtnText: { fontSize: 13, fontWeight: '800', color: '#0f766e' },
+  modalRoot: { flex: 1 },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.48)',
+  },
+  modalSheet: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.95)',
+    maxHeight: '88%',
+  },
+  modalScroll: { maxHeight: '100%' },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#020617', letterSpacing: -0.4 },
+  modalSubtitle: { marginTop: 6, marginBottom: 4, fontSize: 13, fontWeight: '600', color: '#64748b', lineHeight: 18 },
+  modalControlsCard: { marginTop: 12 },
+  modalDoneBtn: {
+    marginTop: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalDoneBtnPressed: { opacity: 0.9 },
+  modalDoneText: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  subtitle: { marginTop: 6, fontSize: 14, fontWeight: '600', color: '#334155', lineHeight: 20 },
+  subtitleStrong: { fontWeight: '800', color: '#0f172a' },
+  controlsCard: {
+    marginTop: 18,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.95)',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  controlsLabel: { fontSize: 12, fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.6 },
+  input: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0f172a',
+  },
+  locRow: { flexDirection: 'row', gap: 10 },
   locInput: { flex: 1 },
   secondaryBtn: {
-    marginTop: 8,
+    marginTop: 12,
     alignSelf: 'flex-start',
     paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#94a3b8',
-    backgroundColor: '#f1f5f9',
-  },
-  secondaryBtnText: { color: '#000000', fontWeight: '700' },
-  primaryBtn: {
-    marginTop: 14,
-    backgroundColor: '#1f6feb',
+    paddingHorizontal: 14,
     borderRadius: 14,
-    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  secondaryBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 14 },
+  primaryBtn: {
+    marginTop: 12,
+    backgroundColor: '#0d9488',
+    borderRadius: 16,
+    paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   loadingHint: {
-    marginTop: 10,
+    marginTop: 12,
     fontSize: 13,
-    color: '#94a3b8',
-    lineHeight: 18,
+    color: '#64748b',
+    lineHeight: 19,
   },
-  card: {
-    marginTop: 16,
-    backgroundColor: '#fff',
-    borderRadius: 16,
+  resultsBlock: { marginTop: 22, gap: 14 },
+  updatedAt: { fontSize: 12, fontWeight: '600', color: '#64748b' },
+  sectionHeading: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginTop: 4,
+  },
+  panel: {
+    borderRadius: 18,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#e5eaf3',
-    padding: 14,
+    backgroundColor: '#fff',
   },
-  cardTitle: { fontSize: 16, fontWeight: '800', color: '#0b1f3a', marginBottom: 8 },
-  cardBody: { fontSize: 14, color: '#22324d', lineHeight: 20 },
+  panelMuted: {
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  panelWarn: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  riskPanel: {
+    borderColor: '#e0f2f1',
+    backgroundColor: '#f0fdfa',
+  },
+  panelTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a', letterSpacing: 0.2 },
+  mutedLine: { marginTop: 8, fontSize: 14, color: '#64748b', lineHeight: 20 },
+  fallbackBody: { marginTop: 8, fontSize: 14, color: '#334155', lineHeight: 22 },
+  riskHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  severityPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  severityPillText: { fontSize: 12, fontWeight: '800' },
+  riskScoreLine: { marginTop: 12 },
+  riskScoreValue: { fontSize: 36, fontWeight: '800', color: '#0f766e', letterSpacing: -1 },
+  riskScoreSuffix: { fontSize: 16, fontWeight: '600', color: '#64748b' },
+  factorList: { marginTop: 14, gap: 8 },
+  factorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  factorBullet: { fontSize: 16, color: '#14b8a6', fontWeight: '800', marginTop: -1 },
+  factorText: { flex: 1, fontSize: 14, color: '#334155', lineHeight: 20, fontWeight: '500' },
+  noteBanner: {
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  noteBannerText: { fontSize: 14, color: '#1e40af', lineHeight: 20, fontWeight: '600' },
+  pickCard: {
+    borderRadius: 18,
+    padding: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 1,
+    gap: 0,
+  },
+  pickCardPressed: { opacity: 0.94 },
+  pickCardSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 28,
+  },
+  pickSummaryMain: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  pickNameWrap: { flex: 1, minWidth: 0 },
+  expandChevronWrap: { justifyContent: 'center', paddingLeft: 2 },
+  expandChevron: { fontSize: 18, fontWeight: '600', color: '#94a3b8', lineHeight: 22 },
+  pickCardExpanded: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e2e8f0',
+    gap: 12,
+  },
+  expandedSectionHint: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    paddingTop: 6,
+  },
+  reasoningLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  pickList: { gap: 14 },
+  pickCardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  pickIndexWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: '#0d9488',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pickIndexText: { fontSize: 14, fontWeight: '800', color: '#fff' },
+  pickPlaceName: { fontSize: 17, fontWeight: '800', color: '#0f172a', lineHeight: 22 },
+  distanceChip: {
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  distanceChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  suggestedBox: {
+    borderRadius: 14,
+    backgroundColor: '#f0fdfa',
+    borderWidth: 1,
+    borderColor: '#99f6e4',
+    padding: 12,
+  },
+  suggestedLabel: { fontSize: 11, fontWeight: '800', color: '#0f766e', textTransform: 'uppercase', letterSpacing: 0.5 },
+  suggestedItem: { marginTop: 4, fontSize: 16, fontWeight: '700', color: '#134e4a', lineHeight: 22 },
+  nutritionLine: { marginTop: 8, fontSize: 13, color: '#115e59', lineHeight: 18, fontWeight: '600' },
+  explanation: { fontSize: 15, color: '#334155', lineHeight: 23, fontWeight: '500' },
+  groundedBox: {
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+  },
+  groundedLabel: { fontSize: 11, fontWeight: '800', color: '#4338ca', textTransform: 'uppercase', letterSpacing: 0.5 },
+  groundedText: { marginTop: 6, fontSize: 13, color: '#3730a3', lineHeight: 19, fontWeight: '500' },
 });
