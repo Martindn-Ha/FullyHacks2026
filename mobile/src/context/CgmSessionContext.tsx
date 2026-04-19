@@ -13,6 +13,10 @@ import { Alert, ScrollView } from 'react-native';
 import * as Location from 'expo-location';
 import { fetchClarityDemoCsv, fetchRecommendations, fetchSpikeRisk, type ClarityDemoDataset } from '../api';
 import { buildSyntheticClarityCsv, parseClarityExportCsv, type GlucosePoint } from '../clarity/parseClarityExport';
+import {
+  ensureSpikeNotificationSetup,
+  presentSpikePredictionNotification,
+} from '../notifications/spikeLocalNotification';
 import { DEFAULT_TIME_COMPRESSION, useSimulatedCgmPlayback } from '../clarity/useSimulatedCgmPlayback';
 
 /** When predicted max (purple / Ridge) exceeds this, auto-run device location + recommendations once until it drops. */
@@ -36,11 +40,30 @@ export type RecommendationPickVm = {
   groundedNote?: string;
 };
 
+export type ExerciseRecommendationVm = {
+  title: string;
+  minutes: number;
+  intensity: 'low' | 'moderate';
+  reason: string;
+  indoorPreferred: boolean;
+};
+
 /** Structured last `/api/recommendations` payload for richer UI (still mirrored in `resultText`). */
 export type RecommendationResultsVm = {
   updatedAt: string;
   risk: { riskScore: number; severity: string; factors: string[] } | null;
   picks: RecommendationPickVm[];
+  exercise: ExerciseRecommendationVm[];
+  weather:
+    | {
+        temperatureC: number | null;
+        apparentTemperatureC: number | null;
+        precipitationMm: number | null;
+        weatherCode: number | null;
+        windSpeedKmh: number | null;
+        isDay: boolean | null;
+      }
+    | null;
   note?: string;
 };
 
@@ -120,6 +143,10 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const autoRecsFromPredictionLatchRef = useRef(false);
   /** When latched, first time we see pred ≤ threshold; used to require sustained “low” before re-arming. */
   const dipBelowThresholdSinceMsRef = useRef<number | null>(null);
+  /** One local notification per predicted-high episode, only after `recommendationResults` exists. */
+  const spikeNotifyLatchRef = useRef(false);
+  const spikeNotifyDipBelowSinceMsRef = useRef<number | null>(null);
+  const spikeNotifyInFlightRef = useRef(false);
 
   /** `playbackT` updates every frame during replay; do not put it in effect deps or the debounce never fires. */
   const playbackTRef = useRef(playbackT);
@@ -289,9 +316,44 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         })
         .join('\n\n');
 
+      const w = data.weather;
+      const weatherLine =
+        w &&
+        (typeof w.apparentTemperatureC === 'number' ||
+          typeof w.temperatureC === 'number' ||
+          typeof w.windSpeedKmh === 'number' ||
+          typeof w.precipitationMm === 'number')
+          ? `\n\nSurface weather: ${
+              [
+                typeof w.apparentTemperatureC === 'number'
+                  ? `${Math.round(w.apparentTemperatureC)}C (feels like)`
+                  : typeof w.temperatureC === 'number'
+                    ? `${Math.round(w.temperatureC)}C`
+                    : null,
+                typeof w.windSpeedKmh === 'number' ? `${Math.round(w.windSpeedKmh)} km/h wind` : null,
+                typeof w.precipitationMm === 'number' ? `${w.precipitationMm.toFixed(1)} mm precip` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || '(no numeric fields)'
+            }`
+          : '';
+
+      const exercise = data.exerciseRecommendations ?? [];
+      const exerciseBlock =
+        exercise.length > 0
+          ? `\n\nMovement ideas:\n${exercise
+              .map(
+                (e, i) =>
+                  `${i + 1}. ${e.title} (${e.minutes} min, ${e.intensity}, ${e.indoorPreferred ? 'indoor preferred' : 'outdoor-friendly'})\n${e.reason}`,
+              )
+              .join('\n\n')}`
+          : '';
+
       const stamp = new Date().toLocaleString();
       const noteBlock = note ? `\n\n${note}\n` : '';
-      setResultText(`Updated: ${stamp}\n\n${header}\n\nTop picks:\n${recs || '(none)'}${noteBlock}`);
+      setResultText(
+        `Updated: ${stamp}\n\n${header}\n\nTop picks:\n${recs || '(none)'}${weatherLine}${exerciseBlock}${noteBlock}`,
+      );
       setRecommendationResults({
         updatedAt: stamp,
         risk: risk
@@ -309,6 +371,14 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
           nutritionInfo: r.nutritionInfo?.trim() || undefined,
           groundedNote: r.groundedNote?.trim() || undefined,
         })),
+        exercise: exercise.map((r) => ({
+          title: r.title,
+          minutes: r.minutes,
+          intensity: r.intensity,
+          reason: r.reason,
+          indoorPreferred: r.indoorPreferred,
+        })),
+        weather: data.weather ?? null,
         note: note || undefined,
       });
       setTimeout(() => recommendationsScrollRef.current?.scrollToEnd({ animated: true }), 150);
@@ -395,6 +465,71 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [mlSpikeReady, mlPredictedMaxMgDl, requestRecommendations, playbackT]);
+
+  /**
+   * Predicted max > 180 → local notification once per episode, only after at least one successful recommendations payload.
+   * Re-arms after the same sustained “low” window as auto recommendations (ignores brief dips).
+   */
+  useEffect(() => {
+    const pred = mlPredictedMaxMgDl;
+    const predOk = pred != null && Number.isFinite(pred);
+
+    const resetEpisode = () => {
+      spikeNotifyLatchRef.current = false;
+      spikeNotifyDipBelowSinceMsRef.current = null;
+    };
+
+    if (!mlSpikeReady || !predOk) {
+      if (!predOk || pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
+        resetEpisode();
+      }
+      return;
+    }
+
+    if (pred <= AUTO_RECS_PREDICTED_MAX_MG_DL) {
+      if (spikeNotifyLatchRef.current) {
+        if (spikeNotifyDipBelowSinceMsRef.current == null) {
+          spikeNotifyDipBelowSinceMsRef.current = Date.now();
+        } else if (Date.now() - spikeNotifyDipBelowSinceMsRef.current >= AUTO_RECS_MIN_BELOW_THRESHOLD_MS) {
+          resetEpisode();
+        }
+      } else {
+        spikeNotifyDipBelowSinceMsRef.current = null;
+      }
+      return;
+    }
+
+    if (spikeNotifyDipBelowSinceMsRef.current != null) {
+      const dipMs = Date.now() - spikeNotifyDipBelowSinceMsRef.current;
+      spikeNotifyDipBelowSinceMsRef.current = null;
+      if (dipMs < AUTO_RECS_MIN_BELOW_THRESHOLD_MS && spikeNotifyLatchRef.current) {
+        return;
+      }
+    }
+
+    if (recommendationResults == null) return;
+    if (spikeNotifyLatchRef.current || spikeNotifyInFlightRef.current) return;
+
+    spikeNotifyInFlightRef.current = true;
+    void (async () => {
+      try {
+        const allowed = await ensureSpikeNotificationSetup();
+        if (!allowed) {
+          spikeNotifyLatchRef.current = true;
+          return;
+        }
+        await presentSpikePredictionNotification({
+          predictedMaxMgDl: pred,
+          horizonMinutes: mlSpikeHorizonMinutes,
+        });
+        spikeNotifyLatchRef.current = true;
+      } catch (e) {
+        console.error('[spike local notification]', e);
+      } finally {
+        spikeNotifyInFlightRef.current = false;
+      }
+    })();
+  }, [mlSpikeReady, mlPredictedMaxMgDl, mlSpikeHorizonMinutes, recommendationResults, playbackT]);
 
   const value = useMemo(
     () =>

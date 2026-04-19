@@ -1,7 +1,18 @@
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
-import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  ImageBackground,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CGM_SPEED_PRESETS } from '../clarity/useSimulatedCgmPlayback';
 import { GlucoseStripChart } from '../components/GlucoseStripChart';
@@ -54,7 +65,7 @@ export function HomeScreen() {
     return Math.max(220, Math.min(580, Math.floor(inner - VERTICAL_CHROME)));
   }, [winH, insets.top, insets.bottom, tabBarHeight]);
 
-  const [showChartSettings, setShowChartSettings] = useState(false);
+  const [demoSettingsOpen, setDemoSettingsOpen] = useState(false);
   const [chartVisibleHours, setChartVisibleHours] = useState(4);
   const [showFutureOrangeTrace, setShowFutureOrangeTrace] = useState(true);
 
@@ -86,14 +97,25 @@ export function HomeScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.topBar}>
-          <Text style={styles.titleCompact}>Sugar Moonshot</Text>
-          <Pressable onPress={() => setShowChartSettings((s) => !s)} hitSlop={10}>
-            <Text style={styles.demoSettingsLink}>
-              {showChartSettings ? 'Hide demo' : 'Demo settings'}
+        <View style={styles.titleRow}>
+          <View style={styles.titleBlock}>
+            <Text style={[styles.title, styles.titleInRow]} numberOfLines={2}>
+              Sugar Moonshot
             </Text>
+          </View>
+          <Pressable
+            onPress={() => setDemoSettingsOpen(true)}
+            style={({ pressed }) => [styles.demoSettingsBtn, pressed && styles.demoSettingsBtnPressed]}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Open demo settings"
+          >
+            <Text style={styles.demoSettingsBtnText}>Demo settings</Text>
           </Pressable>
         </View>
+        <Text style={styles.subtitle}>
+          Live demo glucose <Text style={styles.subtitleStrong}>{displayMgdl}</Text> mg/dL · {trend}
+        </Text>
 
         <View style={styles.cgmCard}>
           {glucosePoints.length >= 8 ? (
@@ -154,109 +176,158 @@ export function HomeScreen() {
             )}
           </View>
         </View>
-
-        {showChartSettings ? (
-          <>
-            <Text style={styles.speedLabel}>Playback</Text>
-            <View style={styles.orangeTraceToggleRow}>
-              <Pressable
-                onPress={() => setPlaybackPaused((p) => !p)}
-                style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
-                hitSlop={6}
-              >
-                <Text style={styles.orangeTraceToggleText}>{isPlaybackPaused ? 'Resume demo' : 'Pause demo'}</Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.speedLabel}>Graph speed</Text>
-            <View style={styles.speedPresets}>
-              {CGM_SPEED_PRESETS.map((p) => {
-                const on = timeCompression === p.compression;
-                return (
-                  <Pressable
-                    key={p.label}
-                    onPress={() => setTimeCompression(p.compression)}
-                    style={[styles.speedChip, on && styles.speedChipOn]}
-                  >
-                    <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <View style={styles.speedFineRow}>
-              <Pressable
-                onPress={() => setTimeCompression((c) => Math.max(2, Math.round(c / 1.12)))}
-                style={styles.speedFineBtn}
-              >
-                <Text style={styles.speedFineBtnText}>Slower −</Text>
-              </Pressable>
-              <Text style={styles.speedFineValue}>{timeCompression}×</Text>
-              <Pressable
-                onPress={() => setTimeCompression((c) => Math.min(2500, Math.round(c * 1.12)))}
-                style={styles.speedFineBtn}
-              >
-                <Text style={styles.speedFineBtnText}>Faster +</Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.speedLabel}>Chart zoom (time across graph width)</Text>
-            <Text style={styles.zoomHint}>
-              Smaller = zoom in — the ML 30‑min band uses more of the chart. Does not change playback speed.
-            </Text>
-            <View style={styles.speedPresets}>
-              {CHART_VISIBLE_HOUR_PRESETS.map((p) => {
-                const on = chartVisibleHours === p.hours;
-                return (
-                  <Pressable
-                    key={p.label}
-                    onPress={() => setChartVisibleHours(p.hours)}
-                    style={[styles.speedChip, on && styles.speedChipOn]}
-                  >
-                    <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <Text style={styles.speedLabel}>Future orange trace</Text>
-            <View style={styles.orangeTraceToggleRow}>
-              <Pressable
-                onPress={() => setShowFutureOrangeTrace((s) => !s)}
-                style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
-                hitSlop={6}
-              >
-                <Text style={styles.orangeTraceToggleText}>
-                  {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
-                </Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
-            <View style={styles.speedPresets}>
-              <Pressable
-                onPress={() => setDemoGlucoseDataset('nondiabetic')}
-                style={[styles.speedChip, demoGlucoseDataset === 'nondiabetic' && styles.speedChipOn]}
-              >
-                <Text
-                  style={[styles.speedChipText, demoGlucoseDataset === 'nondiabetic' && styles.speedChipTextOn]}
-                >
-                  Non-diabetic · 70–140
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setDemoGlucoseDataset('diabetic')}
-                style={[styles.speedChip, demoGlucoseDataset === 'diabetic' && styles.speedChipOn]}
-              >
-                <Text style={[styles.speedChipText, demoGlucoseDataset === 'diabetic' && styles.speedChipTextOn]}>
-                  Diabetic · 70–180
-                </Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.hint}>Location and meal picks live on the Recommendations tab.</Text>
-          </>
-        ) : null}
       </ScrollView>
+
+      <Modal
+        visible={demoSettingsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setDemoSettingsOpen(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={[styles.modalOverlay, { paddingTop: insets.top + 12 }]}>
+            <Pressable
+              style={styles.modalBackdrop}
+              onPress={() => setDemoSettingsOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close demo settings"
+            />
+            <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+                style={styles.modalScroll}
+              >
+                <Text style={styles.modalTitle}>Demo settings</Text>
+                <Text style={styles.modalSubtitle}>
+                  Playback speed, chart zoom, demo cohort, and forecast trace for this screen.
+                </Text>
+
+                <View style={[styles.controlsCard, styles.modalControlsCard]}>
+                  <Text style={styles.speedLabel}>Playback</Text>
+                  <View style={styles.orangeTraceToggleRow}>
+                    <Pressable
+                      onPress={() => setPlaybackPaused((p) => !p)}
+                      style={({ pressed }) => [
+                        styles.orangeTraceToggleBtn,
+                        pressed && styles.orangeTraceToggleBtnPressed,
+                      ]}
+                      hitSlop={6}
+                    >
+                      <Text style={styles.orangeTraceToggleText}>
+                        {isPlaybackPaused ? 'Resume demo' : 'Pause demo'}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.speedLabel}>Graph speed</Text>
+                  <View style={styles.speedPresets}>
+                    {CGM_SPEED_PRESETS.map((p) => {
+                      const on = timeCompression === p.compression;
+                      return (
+                        <Pressable
+                          key={p.label}
+                          onPress={() => setTimeCompression(p.compression)}
+                          style={[styles.speedChip, on && styles.speedChipOn]}
+                        >
+                          <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <View style={styles.speedFineRow}>
+                    <Pressable
+                      onPress={() => setTimeCompression((c) => Math.max(2, Math.round(c / 1.12)))}
+                      style={styles.speedFineBtn}
+                    >
+                      <Text style={styles.speedFineBtnText}>Slower −</Text>
+                    </Pressable>
+                    <Text style={styles.speedFineValue}>{timeCompression}×</Text>
+                    <Pressable
+                      onPress={() => setTimeCompression((c) => Math.min(2500, Math.round(c * 1.12)))}
+                      style={styles.speedFineBtn}
+                    >
+                      <Text style={styles.speedFineBtnText}>Faster +</Text>
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.speedLabel}>Chart zoom (time across graph width)</Text>
+                  <Text style={styles.zoomHint}>
+                    Smaller = zoom in — the ML 30‑min band uses more of the chart. Does not change playback speed.
+                  </Text>
+                  <View style={styles.speedPresets}>
+                    {CHART_VISIBLE_HOUR_PRESETS.map((p) => {
+                      const on = chartVisibleHours === p.hours;
+                      return (
+                        <Pressable
+                          key={p.label}
+                          onPress={() => setChartVisibleHours(p.hours)}
+                          style={[styles.speedChip, on && styles.speedChipOn]}
+                        >
+                          <Text style={[styles.speedChipText, on && styles.speedChipTextOn]}>{p.label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={styles.speedLabel}>Future orange trace</Text>
+                  <View style={styles.orangeTraceToggleRow}>
+                    <Pressable
+                      onPress={() => setShowFutureOrangeTrace((s) => !s)}
+                      style={({ pressed }) => [
+                        styles.orangeTraceToggleBtn,
+                        pressed && styles.orangeTraceToggleBtnPressed,
+                      ]}
+                      hitSlop={6}
+                    >
+                      <Text style={styles.orangeTraceToggleText}>
+                        {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
+                  <View style={styles.speedPresets}>
+                    <Pressable
+                      onPress={() => setDemoGlucoseDataset('nondiabetic')}
+                      style={[styles.speedChip, demoGlucoseDataset === 'nondiabetic' && styles.speedChipOn]}
+                    >
+                      <Text
+                        style={[styles.speedChipText, demoGlucoseDataset === 'nondiabetic' && styles.speedChipTextOn]}
+                      >
+                        Non-diabetic · 70–140
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setDemoGlucoseDataset('diabetic')}
+                      style={[styles.speedChip, demoGlucoseDataset === 'diabetic' && styles.speedChipOn]}
+                    >
+                      <Text style={[styles.speedChipText, demoGlucoseDataset === 'diabetic' && styles.speedChipTextOn]}>
+                        Diabetic · 70–180
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <Text style={styles.hint}>Location and meal picks live on the Recommendations tab.</Text>
+                </View>
+
+                <Pressable
+                  onPress={() => setDemoSettingsOpen(false)}
+                  style={({ pressed }) => [styles.modalDoneBtn, pressed && styles.modalDoneBtnPressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Done"
+                >
+                  <Text style={styles.modalDoneText}>Done</Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ImageBackground>
   );
 }
@@ -271,18 +342,46 @@ const styles = StyleSheet.create({
     gap: 6,
     flexGrow: 1,
   },
-  topBar: {
+  titleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginTop: 0,
-    marginBottom: 4,
-    paddingHorizontal: 2,
+    gap: 10,
   },
-  titleCompact: { fontSize: 17, fontWeight: '800', color: '#000000', letterSpacing: -0.3 },
-  demoSettingsLink: { fontSize: 14, fontWeight: '700', color: '#000000' },
+  titleBlock: { flex: 1, minWidth: 0, gap: 4 },
+  titleInRow: { flex: 1, minWidth: 0 },
+  title: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: -0.6,
+    textShadowColor: 'rgba(15, 23, 42, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 10,
+  },
+  demoSettingsBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.95)',
+  },
+  demoSettingsBtnPressed: { opacity: 0.88 },
+  demoSettingsBtnText: { fontSize: 13, fontWeight: '800', color: '#0f766e', textAlign: 'center' },
+  subtitle: {
+    marginTop: 6,
+    fontSize: 15,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.94)',
+    lineHeight: 22,
+    textShadowColor: 'rgba(15, 23, 42, 0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
+  },
+  subtitleStrong: { fontWeight: '800', color: '#ffffff' },
   cgmCard: {
-    marginTop: 4,
+    marginTop: 12,
     backgroundColor: '#fff',
     borderRadius: 18,
     borderWidth: 1,
@@ -400,4 +499,61 @@ const styles = StyleSheet.create({
     color: '#475569',
     lineHeight: 17,
   },
+  modalRoot: { flex: 1 },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.48)',
+  },
+  modalSheet: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+    maxHeight: '88%',
+  },
+  modalScroll: { maxHeight: '100%' },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#020617', letterSpacing: -0.4 },
+  modalSubtitle: {
+    marginTop: 6,
+    marginBottom: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  controlsCard: {
+    marginTop: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  modalControlsCard: { marginTop: 12 },
+  modalDoneBtn: {
+    marginTop: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalDoneBtnPressed: { opacity: 0.9 },
+  modalDoneText: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
 });

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { CgmSessionProvider } from './src/context/CgmSessionContext';
@@ -7,6 +8,15 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { RecommendationsScreen } from './src/screens/RecommendationsScreen';
 
 const Tab = createBottomTabNavigator();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function App() {
   return (

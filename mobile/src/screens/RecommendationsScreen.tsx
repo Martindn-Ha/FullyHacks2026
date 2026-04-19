@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Image,
   ImageBackground,
   KeyboardAvoidingView,
   Modal,
@@ -14,9 +15,16 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCgmSession, type RecommendationPickVm, type RecommendationResultsVm } from '../context/CgmSessionContext';
+import {
+  useCgmSession,
+  type ExerciseRecommendationVm,
+  type RecommendationPickVm,
+  type RecommendationResultsVm,
+} from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
+const fishOneGif = require('../../assets/fish1.gif');
+const fishThreeGif = require('../../assets/fish3.gif');
 
 function severityVisual(sev: string): { label: string; bg: string; fg: string; border: string } {
   const s = sev.toLowerCase();
@@ -32,36 +40,16 @@ function severityVisual(sev: string): { label: string; bg: string; fg: string; b
 function RiskPanel({ risk }: { risk: RecommendationResultsVm['risk'] }) {
   if (!risk) {
     return (
-      <View style={[styles.panel, styles.panelMuted]}>
-        <Text style={styles.panelTitle}>Risk</Text>
-        <Text style={styles.mutedLine}>Not available for this response.</Text>
-      </View>
+      <Text style={styles.riskOneLine}>
+        Spike radar — no score this time; open Demo settings and run a report.
+      </Text>
     );
   }
   const sev = severityVisual(risk.severity);
   return (
-    <View style={[styles.panel, styles.riskPanel]}>
-      <View style={styles.riskHeaderRow}>
-        <Text style={styles.panelTitle}>Near-term spike risk</Text>
-        <View style={[styles.severityPill, { backgroundColor: sev.bg, borderColor: sev.border }]}>
-          <Text style={[styles.severityPillText, { color: sev.fg }]}>{sev.label}</Text>
-        </View>
-      </View>
-      <Text style={styles.riskScoreLine}>
-        <Text style={styles.riskScoreValue}>{risk.riskScore.toFixed(2)}</Text>
-        <Text style={styles.riskScoreSuffix}> / 1.00</Text>
-      </Text>
-      {risk.factors?.length ? (
-        <View style={styles.factorList}>
-          {risk.factors.map((f, i) => (
-            <View key={`f-${i}`} style={styles.factorRow}>
-              <Text style={styles.factorBullet}>·</Text>
-              <Text style={styles.factorText}>{f}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-    </View>
+    <Text style={styles.riskOneLine} accessibilityRole="text">
+      Spike radar · score {risk.riskScore.toFixed(2)}/1.00 · {sev.label} near-term risk
+    </Text>
   );
 }
 
@@ -123,28 +111,153 @@ function PickCard({ pick, index }: { pick: RecommendationPickVm; index: number }
   );
 }
 
+function WeatherSummary({ data }: { data: RecommendationResultsVm['weather'] }) {
+  if (!data) return null;
+  const temp =
+    typeof data.apparentTemperatureC === 'number'
+      ? `${Math.round(data.apparentTemperatureC)}C (feels like)`
+      : typeof data.temperatureC === 'number'
+        ? `${Math.round(data.temperatureC)}C`
+        : null;
+  const wind = typeof data.windSpeedKmh === 'number' ? `${Math.round(data.windSpeedKmh)} km/h wind` : null;
+  const rain = typeof data.precipitationMm === 'number' ? `${data.precipitationMm.toFixed(1)} mm precip` : null;
+  const parts = [temp, wind, rain].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <View style={styles.weatherBanner}>
+      <Text style={styles.weatherEmoji} accessibilityElementsHidden>
+        🌤️
+      </Text>
+      <View style={styles.weatherTextCol}>
+        <Text style={styles.weatherLabel}>Surface conditions</Text>
+        <Text style={styles.weatherLine}>{parts.join(' · ')}</Text>
+      </View>
+    </View>
+  );
+}
+
+function CollapsibleSection({
+  emoji,
+  title,
+  expanded,
+  onToggle,
+  accessibilityLabel,
+  children,
+}: {
+  emoji: string;
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+  accessibilityLabel: string;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.collapsibleWrap}>
+      <Pressable
+        onPress={onToggle}
+        style={({ pressed }) => [styles.sectionCardOuter, pressed && styles.sectionCardPressed]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={accessibilityLabel}
+      >
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionEmoji} accessibilityElementsHidden>
+            {emoji}
+          </Text>
+          <View style={styles.sectionTextCol}>
+            <Text style={styles.sectionCardTitle}>{title}</Text>
+          </View>
+          <Text style={styles.sectionChevronBig} accessibilityElementsHidden>
+            {expanded ? '▼' : '›'}
+          </Text>
+        </View>
+      </Pressable>
+      {expanded ? <View style={styles.sectionBody}>{children}</View> : null}
+    </View>
+  );
+}
+
+function ExerciseCard({ item, index }: { item: ExerciseRecommendationVm; index: number }) {
+  return (
+    <View style={styles.exerciseCard}>
+      <View style={styles.exerciseHeaderRow}>
+        <Text style={styles.exerciseIndex}>{index + 1}</Text>
+        <Text style={styles.exerciseTitle}>{item.title}</Text>
+      </View>
+      <Text style={styles.exerciseMeta}>
+        {item.minutes} min · {item.intensity} intensity ·{' '}
+        {item.indoorPreferred ? 'indoor preferred' : 'outdoor-friendly'}
+      </Text>
+      <Text style={styles.exerciseReason}>{item.reason}</Text>
+    </View>
+  );
+}
+
 function StructuredResults({ data }: { data: RecommendationResultsVm }) {
+  const [mealExpanded, setMealExpanded] = useState(true);
+  const [exerciseExpanded, setExerciseExpanded] = useState(true);
+
   return (
     <View style={styles.resultsBlock}>
-      <Text style={styles.updatedAt}>Updated {data.updatedAt}</Text>
+      <View style={styles.diveLogChip}>
+        <Text style={styles.diveLogChipLabel}>Dive log</Text>
+        <Text style={styles.diveLogChipTime}>{data.updatedAt}</Text>
+      </View>
       <RiskPanel risk={data.risk} />
       {data.note ? (
         <View style={styles.noteBanner}>
           <Text style={styles.noteBannerText}>{data.note}</Text>
         </View>
       ) : null}
-      <Text style={styles.sectionHeading}>Meal ideas</Text>
-      {data.picks.length === 0 ? (
-        <View style={[styles.panel, styles.panelMuted]}>
-          <Text style={styles.mutedLine}>No restaurant picks for this run (e.g. low-risk gate).</Text>
-        </View>
-      ) : (
-        <View style={styles.pickList}>
-          {data.picks.map((p, i) => (
-            <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
-          ))}
-        </View>
-      )}
+      <CollapsibleSection
+        emoji="🪸"
+        title="Meal ideas"
+        expanded={mealExpanded}
+        onToggle={() => setMealExpanded((v) => !v)}
+        accessibilityLabel={`${mealExpanded ? 'Collapse' : 'Expand'} meal ideas from nearby venues`}
+      >
+        {data.picks.length === 0 ? (
+          <View style={styles.emptyInline}>
+            <Text style={styles.emptyEmoji} accessibilityElementsHidden>
+              🦑
+            </Text>
+            <Text style={styles.onSeaMuted}>
+              The reef is quiet — spike risk was low, so we skipped restaurant picks this round.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.pickList}>
+            {data.picks.map((p, i) => (
+              <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
+            ))}
+          </View>
+        )}
+      </CollapsibleSection>
+      <CollapsibleSection
+        emoji="🌊"
+        title="Movement & weather"
+        expanded={exerciseExpanded}
+        onToggle={() => setExerciseExpanded((v) => !v)}
+        accessibilityLabel={`${exerciseExpanded ? 'Collapse' : 'Expand'} movement and weather section`}
+      >
+        <WeatherSummary data={data.weather} />
+        {data.exercise.length === 0 ? (
+          <View style={styles.emptyInline}>
+            <Text style={styles.emptyEmoji} accessibilityElementsHidden>
+              🐚
+            </Text>
+            <Text style={styles.onSeaMuted}>
+              No movement cues this run — try again when recommendations return fully.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.pickList}>
+            {data.exercise.map((e, i) => (
+              <ExerciseCard key={`${data.updatedAt}-exercise-${i}`} item={e} index={i} />
+            ))}
+          </View>
+        )}
+      </CollapsibleSection>
     </View>
   );
 }
@@ -153,7 +266,7 @@ function FallbackResultCard({ text }: { text: string }) {
   const isErrorish = /could not reach|error|escalat|invalid|failed/i.test(text.slice(0, 80));
   return (
     <View style={[styles.panel, isErrorish ? styles.panelWarn : styles.panelMuted]}>
-      <Text style={styles.panelTitle}>{isErrorish ? 'Message' : 'Results'}</Text>
+      <Text style={styles.panelTitle}>{isErrorish ? 'Drifted off course' : 'From the crow’s nest'}</Text>
       <Text style={styles.fallbackBody}>{text}</Text>
     </View>
   );
@@ -163,8 +276,6 @@ export function RecommendationsScreen() {
   const insets = useSafeAreaInsets();
   const [demoSettingsOpen, setDemoSettingsOpen] = useState(false);
   const {
-    displayMgdl,
-    trend,
     lat,
     lng,
     setLat,
@@ -187,6 +298,10 @@ export function RecommendationsScreen() {
       resizeMode="cover"
     >
       <StatusBar style="light" />
+      <View pointerEvents="none" style={styles.gifDecorLayer} accessibilityElementsHidden>
+        <Image source={fishOneGif} style={styles.gifFishOne} resizeMode="contain" />
+        <Image source={fishThreeGif} style={styles.gifFishThree} resizeMode="contain" />
+      </View>
       <ScrollView
         ref={recommendationsScrollRef}
         style={styles.scrollView}
@@ -194,9 +309,12 @@ export function RecommendationsScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.titleRow}>
-          <Text style={[styles.title, styles.titleInRow]} numberOfLines={1}>
-            Recommendations
-          </Text>
+          <View style={styles.titleBlock}>
+            <Text style={[styles.title, styles.titleInRow]} numberOfLines={2}>
+              Reef report
+            </Text>
+            <Text style={styles.titleTagline}>Glucose-aware meal & movement ideas</Text>
+          </View>
           <Pressable
             onPress={() => setDemoSettingsOpen(true)}
             style={({ pressed }) => [styles.demoSettingsBtn, pressed && styles.demoSettingsBtnPressed]}
@@ -207,9 +325,6 @@ export function RecommendationsScreen() {
             <Text style={styles.demoSettingsBtnText}>Demo settings</Text>
           </Pressable>
         </View>
-        <Text style={styles.subtitle}>
-          Live demo glucose <Text style={styles.subtitleStrong}>{displayMgdl}</Text> mg/dL · {trend}
-        </Text>
 
         {showStructured ? <StructuredResults data={recommendationResults} /> : null}
         {showFallback ? <FallbackResultCard text={resultText} /> : null}
@@ -240,7 +355,7 @@ export function RecommendationsScreen() {
                 style={styles.modalScroll}
               >
                 <Text style={styles.modalTitle}>Demo settings</Text>
-                <Text style={styles.modalSubtitle}>Location and actions for this recommendations demo.</Text>
+                <Text style={styles.modalSubtitle}>Set your location below, then fetch meal and exercise ideas.</Text>
 
                 <View style={[styles.controlsCard, styles.modalControlsCard]}>
                   <Text style={styles.controlsLabel}>Location</Text>
@@ -278,7 +393,7 @@ export function RecommendationsScreen() {
                   </Pressable>
                   {loading ? (
                     <Text style={styles.loadingHint}>
-                      Nearby places + Gemini meal ideas. First run can take a minute — results appear below.
+                      Trawling menus and models… first cast can take a minute; your report surfaces below.
                     </Text>
                   ) : null}
                 </View>
@@ -302,10 +417,30 @@ export function RecommendationsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  scrollView: { flex: 1, backgroundColor: 'transparent' },
+  scrollView: { flex: 1, backgroundColor: 'transparent', zIndex: 2 },
+  gifDecorLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+  gifFishOne: {
+    position: 'absolute',
+    bottom: '40%',
+    right: '10%',
+    width: 130,
+    height: 86,
+    opacity: 0.9,
+  },
+  gifFishThree: {
+    position: 'absolute',
+    bottom: '27%',
+    left: 8,
+    width: 108,
+    height: 76,
+    opacity: 0.86,
+  },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 32,
     gap: 0,
     flexGrow: 1,
@@ -316,8 +451,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  titleBlock: { flex: 1, minWidth: 0, gap: 4 },
   titleInRow: { flex: 1, minWidth: 0 },
-  title: { fontSize: 26, fontWeight: '800', color: '#020617', letterSpacing: -0.6 },
+  title: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: -0.6,
+    textShadowColor: 'rgba(15, 23, 42, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 10,
+  },
+  titleTagline: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.92)',
+    lineHeight: 18,
+    textShadowColor: 'rgba(15, 23, 42, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
   demoSettingsBtn: {
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -365,8 +518,6 @@ const styles = StyleSheet.create({
   },
   modalDoneBtnPressed: { opacity: 0.9 },
   modalDoneText: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
-  subtitle: { marginTop: 6, fontSize: 14, fontWeight: '600', color: '#334155', lineHeight: 20 },
-  subtitleStrong: { fontWeight: '800', color: '#0f172a' },
   controlsCard: {
     marginTop: 18,
     backgroundColor: 'rgba(255,255,255,0.94)',
@@ -420,74 +571,133 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 19,
   },
-  resultsBlock: { marginTop: 22, gap: 14 },
-  updatedAt: { fontSize: 12, fontWeight: '600', color: '#64748b' },
-  sectionHeading: {
-    fontSize: 13,
+  resultsBlock: { marginTop: 14, gap: 16 },
+  diveLogChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(224, 242, 254, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 252, 0.65)',
+  },
+  diveLogChipLabel: { fontSize: 11, fontWeight: '800', color: '#0369a1', letterSpacing: 0.8, textTransform: 'uppercase' },
+  diveLogChipTime: { fontSize: 12, fontWeight: '800', color: '#075985' },
+  collapsibleWrap: { gap: 0 },
+  sectionCardOuter: {
+    width: '100%',
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  sectionCardPressed: { opacity: 0.85 },
+  sectionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(15, 23, 42, 0.38)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
+    borderRadius: 18,
+  },
+  sectionEmoji: { fontSize: 28, lineHeight: 32 },
+  sectionTextCol: { flex: 1, minWidth: 0, gap: 4 },
+  sectionCardTitle: {
+    fontSize: 18,
     fontWeight: '800',
-    color: '#0f172a',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    marginTop: 4,
+    color: '#ffffff',
+    letterSpacing: -0.35,
+    textShadowColor: 'rgba(15, 23, 42, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
+  },
+  sectionChevronBig: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: 'rgba(255, 255, 255, 0.95)',
+    paddingLeft: 4,
+    textShadowColor: 'rgba(15, 23, 42, 0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  sectionBody: { marginTop: 8, gap: 12 },
+  emptyInline: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 4, paddingRight: 8 },
+  emptyEmoji: { fontSize: 22 },
+  onSeaMuted: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.92)',
+    lineHeight: 22,
+    textShadowColor: 'rgba(15, 23, 42, 0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  riskOneLine: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.95)',
+    lineHeight: 22,
+    textShadowColor: 'rgba(15, 23, 42, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
+    paddingRight: 8,
   },
   panel: {
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255, 255, 255, 0.76)',
+    borderColor: 'rgba(226, 232, 240, 0.9)',
   },
   panelMuted: {
-    borderColor: '#e2e8f0',
-    backgroundColor: '#f8fafc',
+    borderColor: 'rgba(226, 232, 240, 0.9)',
+    backgroundColor: 'rgba(248, 250, 252, 0.72)',
   },
   panelWarn: {
-    borderColor: '#fecaca',
-    backgroundColor: '#fef2f2',
+    borderColor: 'rgba(254, 202, 202, 0.9)',
+    backgroundColor: 'rgba(254, 242, 242, 0.78)',
   },
-  riskPanel: {
-    borderColor: '#e0f2f1',
-    backgroundColor: '#f0fdfa',
-  },
-  panelTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a', letterSpacing: 0.2 },
-  mutedLine: { marginTop: 8, fontSize: 14, color: '#64748b', lineHeight: 20 },
-  fallbackBody: { marginTop: 8, fontSize: 14, color: '#334155', lineHeight: 22 },
-  riskHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  severityPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  severityPillText: { fontSize: 12, fontWeight: '800' },
-  riskScoreLine: { marginTop: 12 },
-  riskScoreValue: { fontSize: 36, fontWeight: '800', color: '#0f766e', letterSpacing: -1 },
-  riskScoreSuffix: { fontSize: 16, fontWeight: '600', color: '#64748b' },
-  factorList: { marginTop: 14, gap: 8 },
-  factorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  factorBullet: { fontSize: 16, color: '#14b8a6', fontWeight: '800', marginTop: -1 },
-  factorText: { flex: 1, fontSize: 14, color: '#334155', lineHeight: 20, fontWeight: '500' },
+  panelTitle: { fontSize: 16, fontWeight: '800', color: '#020617', letterSpacing: 0.2 },
+  mutedLine: { marginTop: 8, fontSize: 15, fontWeight: '600', color: '#475569', lineHeight: 22 },
+  fallbackBody: { marginTop: 8, fontSize: 15, fontWeight: '600', color: '#1e293b', lineHeight: 23 },
   noteBanner: {
     borderRadius: 14,
     padding: 14,
-    backgroundColor: '#eff6ff',
+    backgroundColor: 'rgba(239, 246, 255, 0.7)',
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: 'rgba(191, 219, 254, 0.75)',
   },
-  noteBannerText: { fontSize: 14, color: '#1e40af', lineHeight: 20, fontWeight: '600' },
+  noteBannerText: { fontSize: 15, color: '#1e3a8a', lineHeight: 22, fontWeight: '700' },
+  weatherBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: 'rgba(224, 242, 254, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.55)',
+  },
+  weatherEmoji: { fontSize: 26, lineHeight: 30 },
+  weatherTextCol: { flex: 1, minWidth: 0, gap: 4 },
+  weatherLabel: { fontSize: 11, fontWeight: '800', color: '#0369a1', letterSpacing: 0.6, textTransform: 'uppercase' },
+  weatherLine: { fontSize: 15, color: '#0c4a6e', lineHeight: 22, fontWeight: '800' },
   pickCard: {
     borderRadius: 18,
     padding: 16,
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255, 255, 255, 0.68)',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: 'rgba(226, 232, 240, 0.85)',
+    borderLeftWidth: 4,
+    borderLeftColor: 'rgba(20, 184, 166, 0.85)',
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 1,
     gap: 0,
@@ -509,19 +719,19 @@ const styles = StyleSheet.create({
   },
   pickNameWrap: { flex: 1, minWidth: 0 },
   expandChevronWrap: { justifyContent: 'center', paddingLeft: 2 },
-  expandChevron: { fontSize: 18, fontWeight: '600', color: '#94a3b8', lineHeight: 22 },
+  expandChevron: { fontSize: 18, fontWeight: '800', color: '#475569', lineHeight: 22 },
   pickCardExpanded: {
     marginTop: 14,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e2e8f0',
+    borderTopColor: 'rgba(226, 232, 240, 0.9)',
     gap: 12,
   },
   expandedSectionHint: {
     flex: 1,
     fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
+    fontWeight: '800',
+    color: '#475569',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     paddingTop: 6,
@@ -529,7 +739,7 @@ const styles = StyleSheet.create({
   reasoningLabel: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#64748b',
+    color: '#475569',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: 6,
@@ -545,34 +755,59 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pickIndexText: { fontSize: 14, fontWeight: '800', color: '#fff' },
-  pickPlaceName: { fontSize: 17, fontWeight: '800', color: '#0f172a', lineHeight: 22 },
+  pickPlaceName: { fontSize: 17, fontWeight: '800', color: '#020617', lineHeight: 22 },
   distanceChip: {
-    backgroundColor: '#f1f5f9',
+    backgroundColor: 'rgba(241, 245, 249, 0.82)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: 'rgba(226, 232, 240, 0.9)',
   },
-  distanceChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  distanceChipText: { fontSize: 12, fontWeight: '800', color: '#334155' },
   suggestedBox: {
     borderRadius: 14,
-    backgroundColor: '#f0fdfa',
+    backgroundColor: 'rgba(240, 253, 250, 0.72)',
     borderWidth: 1,
-    borderColor: '#99f6e4',
+    borderColor: 'rgba(153, 246, 228, 0.75)',
     padding: 12,
   },
   suggestedLabel: { fontSize: 11, fontWeight: '800', color: '#0f766e', textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestedItem: { marginTop: 4, fontSize: 16, fontWeight: '700', color: '#134e4a', lineHeight: 22 },
   nutritionLine: { marginTop: 8, fontSize: 13, color: '#115e59', lineHeight: 18, fontWeight: '600' },
-  explanation: { fontSize: 15, color: '#334155', lineHeight: 23, fontWeight: '500' },
+  explanation: { fontSize: 16, color: '#1e293b', lineHeight: 24, fontWeight: '600' },
   groundedBox: {
     borderRadius: 12,
     padding: 12,
-    backgroundColor: '#eef2ff',
+    backgroundColor: 'rgba(238, 242, 255, 0.72)',
     borderWidth: 1,
-    borderColor: '#c7d2fe',
+    borderColor: 'rgba(199, 210, 254, 0.8)',
   },
   groundedLabel: { fontSize: 11, fontWeight: '800', color: '#4338ca', textTransform: 'uppercase', letterSpacing: 0.5 },
-  groundedText: { marginTop: 6, fontSize: 13, color: '#3730a3', lineHeight: 19, fontWeight: '500' },
+  groundedText: { marginTop: 6, fontSize: 14, color: '#312e81', lineHeight: 21, fontWeight: '600' },
+  exerciseCard: {
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(186, 230, 253, 0.75)',
+    backgroundColor: 'rgba(236, 254, 255, 0.58)',
+    borderLeftWidth: 5,
+    borderLeftColor: 'rgba(6, 182, 212, 0.75)',
+    gap: 6,
+  },
+  exerciseHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  exerciseIndex: {
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    textAlign: 'center',
+    lineHeight: 22,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1d4ed8',
+    backgroundColor: 'rgba(219, 234, 254, 0.88)',
+  },
+  exerciseTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  exerciseMeta: { fontSize: 13, fontWeight: '800', color: '#334155' },
+  exerciseReason: { fontSize: 15, color: '#1e293b', lineHeight: 22, fontWeight: '600' },
 });
