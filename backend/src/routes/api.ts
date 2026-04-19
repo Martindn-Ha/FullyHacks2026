@@ -200,7 +200,7 @@ apiRouter.post('/recommendations', async (req, res) => {
       apiKey: env.googleMapsApiKey,
     });
 
-    let guidanceSource: 'human_delta' | 'placeholder' | 'none' = 'none';
+    let guidanceSource: 'human_delta' | 'human_delta_empty' | 'placeholder' | 'none' = 'none';
     let guidance: Awaited<ReturnType<typeof retrieveMenuGuidance>> = [];
     if (nearby.places.length > 0) {
       if (env.humanDeltaApiUrl?.trim()) {
@@ -210,7 +210,10 @@ apiRouter.post('/recommendations', async (req, res) => {
           apiUrl: env.humanDeltaApiUrl,
           apiKey: env.humanDeltaApiKey,
         });
-        guidanceSource = 'human_delta';
+        const emptyHd = guidance.some((row) =>
+          row.passages.some((passage) => passage.source === 'human_delta_empty'),
+        );
+        guidanceSource = emptyHd ? 'human_delta_empty' : 'human_delta';
       } else {
         guidance = buildPlaceholderGuidance(nearby.places);
         guidanceSource = 'placeholder';

@@ -64,7 +64,9 @@ export function rankFoodRecommendations(params: {
     const groundedNote =
       src === 'human_delta'
         ? 'Grounded by indexed menu guidance (Human Delta).'
-        : 'Human Delta disabled: generic meal-pattern hint only (Google testing). Not indexed menu data.';
+        : src === 'human_delta_empty'
+          ? 'Human Delta returned no indexed matches for this query; generic meal-pattern hints only. Add venue menus to your corpus for grounded snippets.'
+          : 'Human Delta disabled: generic meal-pattern hint only (Google testing). Not indexed menu data.';
 
     candidates.push({
       place,
