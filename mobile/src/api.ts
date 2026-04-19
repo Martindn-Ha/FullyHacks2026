@@ -77,6 +77,9 @@ export async function fetchClarityDemoCsv(dataset: ClarityDemoDataset = 'nondiab
 /** Backend can take up to ~115s (Google 25s + Human Delta 90s) before responding. */
 const RECOMMENDATIONS_TIMEOUT_MS = 150_000;
 
+/** Human Delta search + Gemini SMS narrative (Contact screen). */
+const SMS_CHECK_IN_MESSAGE_TIMEOUT_MS = 120_000;
+
 async function fetchWithTimeout(
   input: string,
   init: RequestInit,
@@ -138,6 +141,53 @@ export type RecommendationResponse = {
   escalationMessage?: string;
   disclaimer?: string;
 };
+
+export type SmsCheckInMessageRequest = {
+  symptoms: string[];
+  templateFields: Record<string, string>;
+  messageTemplate?: string;
+  recentSpikeEvents: {
+    atMs: number;
+    glucoseMgDl: number;
+    latitude: number | null;
+    longitude: number | null;
+  }[];
+};
+
+export type SmsCheckInMessageResponse = {
+  message: string;
+  humanDeltaPassageCount: number;
+  disclaimer?: string;
+};
+
+export async function fetchSmsCheckInMessage(
+  body: SmsCheckInMessageRequest,
+): Promise<SmsCheckInMessageResponse> {
+  const url = `${baseUrl.replace(/\/$/, '')}/api/sms-check-in-message`;
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    SMS_CHECK_IN_MESSAGE_TIMEOUT_MS,
+  );
+  const text = await res.text();
+  let data: SmsCheckInMessageResponse & { error?: string };
+  try {
+    data = JSON.parse(text) as typeof data;
+  } catch {
+    throw new Error(text.slice(0, 200) || `SMS narrative failed (${res.status})`);
+  }
+  if (!res.ok) {
+    throw new Error(data.error || text || `SMS narrative failed (${res.status})`);
+  }
+  if (typeof data.message !== 'string' || !data.message.trim()) {
+    throw new Error('SMS narrative response missing message.');
+  }
+  return data;
+}
 
 export async function fetchRecommendations(
   body: RecommendationRequest,

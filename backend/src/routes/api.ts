@@ -17,6 +17,7 @@ import {
   type ClarityDemoDataset,
 } from '../services/clarityDemoCsv.js';
 import { runSpikeModelInference } from '../services/spikeModelInference.js';
+import { composeSmsCheckInMessage } from '../services/smsCheckInNarrative.js';
 
 export const apiRouter = express.Router();
 
@@ -395,5 +396,96 @@ apiRouter.post('/recommendations', async (req, res) => {
     });
   } catch (err) {
     return integrationResponse(res, err, 'recommendations');
+  }
+});
+
+/**
+ * Compose one SMS body after the symptom sheet: Human Delta (ADA-indexed web crawl when configured)
+ * + Gemini, using template fields, symptoms, and recent spike events.
+ */
+apiRouter.post('/sms-check-in-message', async (req, res) => {
+  try {
+    const raw = req.body as {
+      symptoms?: unknown;
+      templateFields?: unknown;
+      messageTemplate?: unknown;
+      recentSpikeEvents?: unknown;
+    };
+
+    const symptoms = Array.isArray(raw.symptoms) ? raw.symptoms.map(String) : [];
+    const messageTemplate = typeof raw.messageTemplate === 'string' ? raw.messageTemplate : '';
+
+    const templateFields: Record<string, string> = {};
+    if (raw.templateFields && typeof raw.templateFields === 'object' && !Array.isArray(raw.templateFields)) {
+      for (const [k, v] of Object.entries(raw.templateFields as Record<string, unknown>)) {
+        if (typeof v === 'string' || typeof v === 'number') {
+          templateFields[k] = String(v);
+        }
+      }
+    }
+
+    const recentSpikeEvents: {
+      atMs: number;
+      glucoseMgDl: number;
+      latitude: number | null;
+      longitude: number | null;
+    }[] = [];
+
+    if (Array.isArray(raw.recentSpikeEvents)) {
+      for (const ev of raw.recentSpikeEvents) {
+        if (!ev || typeof ev !== 'object') continue;
+        const o = ev as Record<string, unknown>;
+        const atMs = Number(o.atMs);
+        const glucoseMgDl = Number(o.glucoseMgDl);
+        if (!Number.isFinite(atMs) || !Number.isFinite(glucoseMgDl)) continue;
+        const la = o.latitude;
+        const lo = o.longitude;
+        const latitude = la == null ? null : Number(la);
+        const longitude = lo == null ? null : Number(lo);
+        recentSpikeEvents.push({
+          atMs,
+          glucoseMgDl,
+          latitude: latitude != null && Number.isFinite(latitude) ? latitude : null,
+          longitude: longitude != null && Number.isFinite(longitude) ? longitude : null,
+        });
+      }
+    }
+
+    const env = readEnv();
+    if (!env.vertexGeminiApiKey?.trim()) {
+      const msg =
+        'VERTEX_GEMINI_API_KEY (or GEMINI_API_KEY / GOOGLE_API_KEY) is not set — SMS narrative requires Gemini.';
+      console.warn(`[api sms-check-in-message] 503 ${msg}`);
+      return res.status(503).json({ error: msg });
+    }
+    if (env.geminiUseVertex && !env.vertexProjectId?.trim()) {
+      const msg =
+        'GEMINI_VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required when GEMINI_USE_VERTEX=true.';
+      console.warn(`[api sms-check-in-message] 503 ${msg}`);
+      return res.status(503).json({ error: msg });
+    }
+
+    const { message, humanDeltaPassageCount } = await composeSmsCheckInMessage({
+      symptoms,
+      templateFields,
+      messageTemplate,
+      recentSpikeEvents,
+      humanDeltaApiUrl: env.humanDeltaApiUrl,
+      humanDeltaApiKey: env.humanDeltaApiKey,
+      vertexGeminiApiKey: env.vertexGeminiApiKey,
+      geminiModel: env.geminiModel,
+      geminiUseVertex: env.geminiUseVertex,
+      vertexProjectId: env.vertexProjectId,
+      vertexLocation: env.vertexLocation,
+    });
+
+    return res.json({
+      message,
+      humanDeltaPassageCount,
+      disclaimer:
+        'Hackathon demo: not medical advice. Narrative may use Human Delta retrieval over configured indexes (e.g. ADA education) plus your entered facts.',
+    });
+  } catch (err) {
+    return integrationResponse(res, err, 'sms-check-in-message');
   }
 });
