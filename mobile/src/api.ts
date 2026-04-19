@@ -15,6 +15,8 @@ export type ClarityDemoDataset = 'nondiabetic' | 'diabetic';
 export type SpikeRiskResponse = {
   ready: boolean;
   spikeProbability?: number | null;
+  predictedMaxMgDl?: number | null;
+  task?: string;
   thresholdMgDl?: number;
   horizonMinutes?: number;
   nPointsUsed?: number;
@@ -25,7 +27,7 @@ export type SpikeRiskResponse = {
 
 const SPIKE_TIMEOUT_MS = 30_000;
 
-/** Calls backend `/api/spike-risk` (Python LightGBM bundle on the server). */
+/** Calls backend `/api/spike-risk` (Python Ridge regression bundle in `ml_model/` on the server). */
 export async function fetchSpikeRisk(
   points: Pick<GlucosePoint, 't' | 'mgdl'>[],
   outerSignal?: AbortSignal,

@@ -86,8 +86,9 @@ apiRouter.get('/clarity-demo', (req, res) => {
 });
 
 /**
- * ML spike risk from `spike_model_app` (LightGBM). Body: `{ "points": [ { "t": ms, "mgdl": number }, ... ] }`.
- * Requires Python + `pip install -r spike_model_app/requirements-inference.txt` on the machine running the API.
+ * ML glucose forecast (time-series regression in `ml_model/`, Ridge on 5-minute features). Same route name for clients.
+ * Body: `{ "points": [ { "t": ms, "mgdl": number }, ... ] }`.
+ * Requires Python + `pip install -r ml_model/requirements.txt` (venv `ml_model/.venv` recommended).
  */
 apiRouter.post('/spike-risk', (req, res) => {
   const raw = req.body as { points?: unknown };

@@ -33,6 +33,7 @@ export function HomeScreen() {
     trend,
     mlSpikeReady,
     mlSpikeProbability,
+    mlPredictedMaxMgDl,
     mlSpikeThresholdMgDl,
     mlSpikeHorizonMinutes,
     mlSpikeNote,
@@ -53,6 +54,7 @@ export function HomeScreen() {
 
   const [showChartSettings, setShowChartSettings] = useState(false);
   const [chartVisibleHours, setChartVisibleHours] = useState(4);
+  const [showFutureOrangeTrace, setShowFutureOrangeTrace] = useState(true);
 
   /** Green band matches demo cohort: diabetic CSV → 70–180; non-diabetic export → 70–140. */
   const targetBandHigh = demoGlucoseDataset === 'diabetic' ? 180 : 140;
@@ -93,22 +95,37 @@ export function HomeScreen() {
 
         <View style={styles.cgmCard}>
           {glucosePoints.length >= 8 ? (
-            <GlucoseStripChart
-              points={glucosePoints}
-              playbackT={playbackT}
-              width={chartW}
-              height={chartH}
-              targetBandLow={70}
-              targetBandHigh={targetBandHigh}
-              demoGlucoseDataset={demoGlucoseDataset}
-              mlSpikeBand={{
-                horizonMinutes: mlSpikeHorizonMinutes ?? 30,
-                thresholdMgDl: mlSpikeThresholdMgDl ?? 180,
-                probability: mlSpikeReady && mlSpikeProbability !== null ? mlSpikeProbability : null,
-                ready: mlSpikeReady,
-              }}
-              visibleRangeHours={chartVisibleHours}
-            />
+            <>
+              <GlucoseStripChart
+                points={glucosePoints}
+                playbackT={playbackT}
+                width={chartW}
+                height={chartH}
+                targetBandLow={70}
+                targetBandHigh={targetBandHigh}
+                demoGlucoseDataset={demoGlucoseDataset}
+                mlForecast={{
+                  horizonMinutes: mlSpikeHorizonMinutes ?? 30,
+                  thresholdMgDl: mlSpikeThresholdMgDl ?? 180,
+                  predictedMaxMgDl:
+                    mlSpikeReady && mlPredictedMaxMgDl !== null ? mlPredictedMaxMgDl : null,
+                  ready: mlSpikeReady,
+                }}
+                visibleRangeHours={chartVisibleHours}
+                showFutureOrangeTrace={showFutureOrangeTrace}
+              />
+              <View style={styles.orangeTraceToggleRow}>
+                <Pressable
+                  onPress={() => setShowFutureOrangeTrace((s) => !s)}
+                  style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
+                  hitSlop={6}
+                >
+                  <Text style={styles.orangeTraceToggleText}>
+                    {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
           ) : (
             <View style={[styles.graphPlaceholder, { width: chartW, minHeight: chartH }]}>
               <Text style={styles.cgmLoading}>Preparing graph…</Text>
@@ -124,10 +141,12 @@ export function HomeScreen() {
             </Text>
           </View>
           <View style={styles.spikeRow}>
-            <Text style={styles.spikeLabel}>ML spike risk (forward window)</Text>
-            <Text style={styles.spikeValue} numberOfLines={6}>
+            <Text style={styles.spikeLabel}>ML glucose forecast (forward window)</Text>
+            <Text style={styles.spikeValue} numberOfLines={8}>
               {mlSpikeReady && mlSpikeProbability !== null
-                ? `${Math.round(mlSpikeProbability * 100)}% chance of any CGM above ${mlSpikeThresholdMgDl ?? '—'} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min.\nShaded band on the graph = that time window (not a predicted glucose curve).\nThe model learns from future samples strictly above that level, not “≥ right now”; already-high-but-flat glucose can score low. On the 180 mg/dL demo band the dolphin uses >180 at the playhead so it matches that spike edge.`
+                ? mlPredictedMaxMgDl !== null
+                  ? `Ridge regression predicts max glucose ≈ ${Math.round(mlPredictedMaxMgDl)} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min (target: highest reading in that window on a 5‑minute grid).\nPurple dashed trace = ramp to that predicted level (timed to the replay’s peak in the window when orange data exists), then level to the horizon — still one scalar forecast, shaped for easier reading.`
+                  : `Model score ${Math.round(mlSpikeProbability * 100)}% vs threshold ${mlSpikeThresholdMgDl ?? '—'} mg/dL in the next ${mlSpikeHorizonMinutes ?? '—'} min.\nWhen the API returns a predicted max, the chart shows it as the purple dashed segment.`
                 : (mlSpikeNote ?? '…')}
             </Text>
           </View>
@@ -252,6 +271,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
     borderRadius: 12,
   },
+  orangeTraceToggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 2,
+    paddingTop: 2,
+    paddingBottom: 0,
+  },
+  orangeTraceToggleBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f1f5f9',
+  },
+  orangeTraceToggleBtnPressed: { opacity: 0.88 },
+  orangeTraceToggleText: { fontSize: 12, fontWeight: '700', color: '#334155' },
   cgmStatsBar: {
     flexDirection: 'row',
     alignItems: 'center',
