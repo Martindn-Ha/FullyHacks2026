@@ -43,7 +43,7 @@ export function useSimulatedCgmPlayback(
         while (next < tStart) next += span;
         return next;
       });
-    }, 33);
+    }, 16);
     return () => clearInterval(id);
   }, [points, wantPlay, compression, tStart, tEnd, span]);
 

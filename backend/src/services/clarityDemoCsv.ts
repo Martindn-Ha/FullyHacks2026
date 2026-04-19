@@ -1,32 +1,39 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export type ClarityDemoDataset = 'nondiabetic' | 'diabetic';
+
+const DEMO_FILES: Record<ClarityDemoDataset, string> = {
+  nondiabetic: 'Clarity_Export_Ha_Martin_2026-04-19_015400.csv',
+  diabetic: 'diabetic.csv',
+};
+
+function dummydataDirs(): string[] {
+  return [path.resolve(process.cwd(), '..', 'dummydata'), path.resolve(process.cwd(), 'dummydata')];
+}
+
+function readCsvIfPresent(dir: string, fileName: string): string | null {
+  const resolvedDir = path.resolve(dir);
+  const full = path.resolve(path.join(resolvedDir, fileName));
+  const rel = path.relative(resolvedDir, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
+  try {
+    return fs.readFileSync(full, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Serves the first `Clarity_Export*.csv` under repo `dummydata/` (gitignored) for mobile demo graphs.
+ * Reads a fixed demo CSV from repo `dummydata/` (gitignored).
  * `cwd` is usually `backend/` when running `npm run dev`.
  */
-export function tryReadClarityDemoCsv(): string | null {
-  const candidates = [
-    path.resolve(process.cwd(), '..', 'dummydata'),
-    path.resolve(process.cwd(), 'dummydata'),
-  ];
-  for (const dir of candidates) {
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
-    const files = fs
-      .readdirSync(dir)
-      .filter(
-        (f) =>
-          f.toLowerCase().endsWith('.csv') &&
-          (f.toLowerCase().includes('clarity') || f.toLowerCase().includes('export')),
-      )
-      .sort();
-    if (!files.length) continue;
-    const full = path.join(dir, files[0]);
-    try {
-      return fs.readFileSync(full, 'utf8');
-    } catch {
-      /* try next dir */
-    }
+export function tryReadClarityDemoCsv(dataset: ClarityDemoDataset = 'nondiabetic'): string | null {
+  const fileName = DEMO_FILES[dataset];
+  for (const dir of dummydataDirs()) {
+    const raw = readCsvIfPresent(dir, fileName);
+    if (raw) return raw;
   }
   return null;
 }

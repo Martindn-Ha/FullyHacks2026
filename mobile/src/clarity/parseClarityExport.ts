@@ -61,6 +61,34 @@ export function glucoseAtTime(points: GlucosePoint[], t: number): number {
   return Math.round(Math.max(40, Math.min(400, v)));
 }
 
+/**
+ * Linear mg/dL between bracketing EGV samples (float) — same geometry as the SVG polyline;
+ * use this for thresholds and Y mapping so crossings are not delayed by rounding.
+ */
+export function glucoseLinearUnroundedAtTime(points: GlucosePoint[], t: number): number {
+  if (points.length === 0) return 100;
+  if (t <= points[0].t) return points[0].mgdl;
+  const last = points[points.length - 1];
+  if (t >= last.t) return last.mgdl;
+  let lo = 0;
+  let hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t <= t) lo = mid;
+    else hi = mid;
+  }
+  const a = points[lo];
+  const b = points[hi];
+  const span = b.t - a.t;
+  const frac = span > 0 ? (t - a.t) / span : 0;
+  return a.mgdl + (b.mgdl - a.mgdl) * frac;
+}
+
+/** Integer linear glucose (rounded) — handy for readouts aligned to whole mg/dL. */
+export function glucoseLinearAtTime(points: GlucosePoint[], t: number): number {
+  return Math.round(glucoseLinearUnroundedAtTime(points, t));
+}
+
 export function inferGlucoseTrend(points: GlucosePoint[], t: number, lookbackMs = 15 * 60 * 1000) {
   const now = glucoseAtTime(points, t);
   const past = glucoseAtTime(points, Math.max(points[0]?.t ?? t, t - lookbackMs));
