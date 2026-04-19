@@ -44,6 +44,8 @@ npm install
 npm run start:cloudflare
 ```
 
+**If you used `npm run start:tunnel` and see `failed to start tunnel` / `remote gone away`:** (1) **Always do this first** from **`mobile/`**: **`rm -rf node_modules && npm install`**, then retry tunnel if you still need it (use **`npx expo start --tunnel`**; same as `npm run start:tunnel`, but has been more reliable here). (2) Prefer **`npm run start:cloudflare`** (above) or **`npm run start:lan`** on open home Wi‑Fi so you are not dependent on ngrok. (3) If you use Homebrew ngrok: reinstall + **`ngrok config add-authtoken`**. Full ordered list: **Troubleshooting** → **`expo start --tunnel` / `remote gone away`**.
+
 Open **Expo Go** and scan the QR code from the Expo terminal.
 
 **Simulator on the same Mac** (no tunnels): from **`mobile/`**, use **`npx expo start`** and press **`i`** / **`a`** — use **`http://localhost:3000`** in **`EXPO_PUBLIC_API_BASE_URL`**.
@@ -128,7 +130,7 @@ Optional environment (shell only, not required in `.env` unless you want them pe
 - **Eduroam: phone cannot open Metro / QR never loads** — Use **`npm run start:cloudflare`** in **`mobile/`**. If **cloudflared** exits immediately, read the script’s dumped logs; try **`EDUROAM_EXPO_VERBOSE=1`**. If tunnels never come up, the network may block **outbound** tunnel traffic — try **GlobalProtect / another campus network**, or develop against the **iOS Simulator** on the Mac (`npx expo start`).
 - **Edits don’t show up live while using `start:cloudflare`** — **Fast Refresh** depends on a **WebSocket** to Metro; **trycloudflare** often breaks or delays that. Press **`r`** in the Expo terminal to **reload** after saves, or **restart** `start:cloudflare` if reload hangs.
 - **`expo start --tunnel` / `remote gone away`** — Treat this as a **broken local toolchain first**, then fall back to Cloudflare. Do these **in order** (skipping reinstall is the usual reason fixes “don’t work”):
-  1. **Clean reinstall Metro deps** (from **`mobile/`**): `rm -rf node_modules && npm install`, then **`npm run start:tunnel`** again.
+  1. **Clean reinstall Metro deps** (from **`mobile/`**): `rm -rf node_modules && npm install`, then retry tunnel with **`npx expo start --tunnel`** (equivalent to `npm run start:tunnel`).
   2. **If you use Homebrew ngrok** (separate from Expo’s bundled agent): `brew uninstall ngrok && brew install ngrok` (or `brew reinstall ngrok`), then `ngrok config add-authtoken <token>` from the ngrok dashboard.
   3. If tunnel still fails: **`npm run start:cloudflare`** in **`mobile/`** (recommended on campus / flaky ngrok); keep **`backend`** **`npm run tunnel`** for **`EXPO_PUBLIC_API_BASE_URL`** when the phone cannot use your LAN IP. See [expo#43335](https://github.com/expo/expo/issues/43335).
   4. Last resort: **iOS Simulator** on the Mac (`npx expo start`) — no Metro tunnel needed.

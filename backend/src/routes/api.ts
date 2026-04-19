@@ -273,10 +273,7 @@ apiRouter.post('/recommendations', async (req, res) => {
       risk = {
         riskScore: Math.max(risk.riskScore, 0.4),
         severity: sev,
-        factors: [
-          ...risk.factors,
-          '(dev) Low-risk gate bypassed — unset DEV_BYPASS_LOW_RISK_RECOMMENDATIONS_GATE in backend/.env for real behavior.',
-        ],
+        factors: risk.factors,
       };
     }
 

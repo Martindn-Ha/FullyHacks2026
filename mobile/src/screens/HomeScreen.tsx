@@ -26,6 +26,8 @@ export function HomeScreen() {
     glucosePoints,
     demoGlucoseDataset,
     setDemoGlucoseDataset,
+    isPlaybackPaused,
+    setPlaybackPaused,
     timeCompression,
     setTimeCompression,
     playbackT,
@@ -114,17 +116,6 @@ export function HomeScreen() {
                 visibleRangeHours={chartVisibleHours}
                 showFutureOrangeTrace={showFutureOrangeTrace}
               />
-              <View style={styles.orangeTraceToggleRow}>
-                <Pressable
-                  onPress={() => setShowFutureOrangeTrace((s) => !s)}
-                  style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
-                  hitSlop={6}
-                >
-                  <Text style={styles.orangeTraceToggleText}>
-                    {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
-                  </Text>
-                </Pressable>
-              </View>
             </>
           ) : (
             <View style={[styles.graphPlaceholder, { width: chartW, minHeight: chartH }]}>
@@ -166,6 +157,17 @@ export function HomeScreen() {
 
         {showChartSettings ? (
           <>
+            <Text style={styles.speedLabel}>Playback</Text>
+            <View style={styles.orangeTraceToggleRow}>
+              <Pressable
+                onPress={() => setPlaybackPaused((p) => !p)}
+                style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
+                hitSlop={6}
+              >
+                <Text style={styles.orangeTraceToggleText}>{isPlaybackPaused ? 'Resume demo' : 'Pause demo'}</Text>
+              </Pressable>
+            </View>
+
             <Text style={styles.speedLabel}>Graph speed</Text>
             <View style={styles.speedPresets}>
               {CGM_SPEED_PRESETS.map((p) => {
@@ -214,6 +216,19 @@ export function HomeScreen() {
                   </Pressable>
                 );
               })}
+            </View>
+
+            <Text style={styles.speedLabel}>Future orange trace</Text>
+            <View style={styles.orangeTraceToggleRow}>
+              <Pressable
+                onPress={() => setShowFutureOrangeTrace((s) => !s)}
+                style={({ pressed }) => [styles.orangeTraceToggleBtn, pressed && styles.orangeTraceToggleBtnPressed]}
+                hitSlop={6}
+              >
+                <Text style={styles.orangeTraceToggleText}>
+                  {showFutureOrangeTrace ? 'Hide future (orange) trace' : 'Show future (orange) trace'}
+                </Text>
+              </Pressable>
             </View>
 
             <Text style={styles.speedLabel}>Demo person (CSV + target band)</Text>
