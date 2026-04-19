@@ -9,6 +9,18 @@ export function getApiBaseUrl(): string {
   return baseUrl;
 }
 
+/** Optional: raw Clarity / Stelo CSV from backend `dummydata/` for the CGM-style graph. */
+export async function fetchClarityDemoCsv(): Promise<string | null> {
+  const url = `${baseUrl.replace(/\/$/, '')}/api/clarity-demo`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 /** Backend can take up to ~115s (Google 25s + Human Delta 90s) before responding. */
 const RECOMMENDATIONS_TIMEOUT_MS = 150_000;
 

@@ -4,3 +4,4 @@ dist/
 .expo/
 *.log
 .DS_Store
+dummydata
