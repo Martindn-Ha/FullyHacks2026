@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   ImageBackground,
   KeyboardAvoidingView,
   Modal,
@@ -22,6 +23,8 @@ import {
 } from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
+const fishOne = require('../../assets/fish1.gif');
+const fishTwo = require('../../assets/fish3.gif');
 
 function severityVisual(sev: string): { label: string; bg: string; fg: string; border: string } {
   const s = sev.toLowerCase();
@@ -47,7 +50,7 @@ function RiskPanel({ risk }: { risk: RecommendationResultsVm['risk'] }) {
   return (
     <View style={[styles.panel, styles.riskPanel]}>
       <View style={styles.riskHeaderRow}>
-        <Text style={styles.panelTitle}>Near-term spike risk</Text>
+        <Text style={styles.panelTitle}>Spike radar</Text>
         <View style={[styles.severityPill, { backgroundColor: sev.bg, borderColor: sev.border }]}>
           <Text style={[styles.severityPillText, { color: sev.fg }]}>{sev.label}</Text>
         </View>
@@ -142,7 +145,7 @@ function WeatherSummary({ data }: { data: RecommendationResultsVm['weather'] }) 
   if (parts.length === 0) return null;
   return (
     <View style={styles.noteBanner}>
-      <Text style={styles.noteBannerText}>Weather now: {parts.join(' · ')}</Text>
+      <Text style={styles.noteBannerText}>Surface weather: {parts.join(' · ')}</Text>
     </View>
   );
 }
@@ -163,40 +166,73 @@ function ExerciseCard({ item, index }: { item: ExerciseRecommendationVm; index: 
 }
 
 function StructuredResults({ data }: { data: RecommendationResultsVm }) {
+  const [mealExpanded, setMealExpanded] = useState(true);
+  const [exerciseExpanded, setExerciseExpanded] = useState(true);
+
   return (
     <View style={styles.resultsBlock}>
-      <Text style={styles.updatedAt}>Updated {data.updatedAt}</Text>
+      <Text style={styles.updatedAt}>Dive log updated {data.updatedAt}</Text>
       <RiskPanel risk={data.risk} />
-      <WeatherSummary data={data.weather} />
       {data.note ? (
         <View style={styles.noteBanner}>
           <Text style={styles.noteBannerText}>{data.note}</Text>
         </View>
       ) : null}
-      <Text style={styles.sectionHeading}>Meal ideas</Text>
-      {data.picks.length === 0 ? (
-        <View style={[styles.panel, styles.panelMuted]}>
-          <Text style={styles.mutedLine}>No restaurant picks for this run (e.g. low-risk gate).</Text>
+      <Pressable
+        onPress={() => setMealExpanded((v) => !v)}
+        style={({ pressed }) => [styles.sectionHeaderBtn, pressed && styles.pickCardPressed]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: mealExpanded }}
+        accessibilityLabel={`${mealExpanded ? 'Collapse' : 'Expand'} reef meal picks`}
+      >
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeading}>Reef meal picks</Text>
+          <Text style={styles.sectionHeaderChevron}>{mealExpanded ? '▼' : '›'}</Text>
         </View>
-      ) : (
-        <View style={styles.pickList}>
-          {data.picks.map((p, i) => (
-            <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
-          ))}
+      </Pressable>
+      {mealExpanded
+        ? data.picks.length === 0
+          ? (
+            <View style={[styles.panel, styles.panelMuted]}>
+              <Text style={styles.mutedLine}>No restaurant picks for this run (e.g. low-risk gate).</Text>
+            </View>
+          )
+          : (
+            <View style={styles.pickList}>
+              {data.picks.map((p, i) => (
+                <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
+              ))}
+            </View>
+          )
+        : null}
+      <Pressable
+        onPress={() => setExerciseExpanded((v) => !v)}
+        style={({ pressed }) => [styles.sectionHeaderBtn, pressed && styles.pickCardPressed]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: exerciseExpanded }}
+        accessibilityLabel={`${exerciseExpanded ? 'Collapse' : 'Expand'} current-guided movement`}
+      >
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeading}>Current-guided movement</Text>
+          <Text style={styles.sectionHeaderChevron}>{exerciseExpanded ? '▼' : '›'}</Text>
         </View>
-      )}
-      <Text style={styles.sectionHeading}>Exercise ideas</Text>
-      {data.exercise.length === 0 ? (
-        <View style={[styles.panel, styles.panelMuted]}>
-          <Text style={styles.mutedLine}>No exercise guidance was returned for this run.</Text>
-        </View>
-      ) : (
-        <View style={styles.pickList}>
-          {data.exercise.map((e, i) => (
-            <ExerciseCard key={`${data.updatedAt}-exercise-${i}`} item={e} index={i} />
-          ))}
-        </View>
-      )}
+      </Pressable>
+      {exerciseExpanded ? (
+        <>
+          <WeatherSummary data={data.weather} />
+          {data.exercise.length === 0 ? (
+            <View style={[styles.panel, styles.panelMuted]}>
+              <Text style={styles.mutedLine}>No exercise guidance was returned for this run.</Text>
+            </View>
+          ) : (
+            <View style={styles.pickList}>
+              {data.exercise.map((e, i) => (
+                <ExerciseCard key={`${data.updatedAt}-exercise-${i}`} item={e} index={i} />
+              ))}
+            </View>
+          )}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -239,6 +275,10 @@ export function RecommendationsScreen() {
       resizeMode="cover"
     >
       <StatusBar style="light" />
+      <View pointerEvents="none" style={styles.fishLayer}>
+        <Image source={fishOne} style={styles.fishOne} resizeMode="contain" />
+        <Image source={fishTwo} style={styles.fishTwo} resizeMode="contain" />
+      </View>
       <ScrollView
         ref={recommendationsScrollRef}
         style={styles.scrollView}
@@ -354,7 +394,27 @@ export function RecommendationsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  scrollView: { flex: 1, backgroundColor: 'transparent' },
+  fishLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+  fishOne: {
+    position: 'absolute',
+    top: '56%',
+    right: 100,
+    width: 145,
+    height: 92,
+    opacity: 0.9,
+  },
+  fishTwo: {
+    position: 'absolute',
+    top: '63%',
+    left: 10,
+    width: 132,
+    height: 88,
+    opacity: 0.88,
+  },
+  scrollView: { flex: 1, backgroundColor: 'transparent', zIndex: 2 },
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -472,21 +532,42 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 19,
   },
-  resultsBlock: { marginTop: 22, gap: 14 },
-  updatedAt: { fontSize: 12, fontWeight: '600', color: '#64748b' },
+  resultsBlock: { marginTop: 22, gap: 16 },
+  updatedAt: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0c4a6e',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(224, 242, 254, 0.9)',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
   sectionHeading: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#0c4a6e',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
     marginTop: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(186, 230, 253, 0.75)',
+    borderWidth: 1,
+    borderColor: '#7dd3fc',
   },
+  sectionHeaderBtn: { alignSelf: 'flex-start' },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionHeaderChevron: { fontSize: 15, fontWeight: '800', color: '#075985', marginTop: 1 },
   panel: {
-    borderRadius: 18,
+    borderRadius: 22,
     padding: 16,
     borderWidth: 1,
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255,255,255,0.95)',
   },
   panelMuted: {
     borderColor: '#e2e8f0',
@@ -524,19 +605,21 @@ const styles = StyleSheet.create({
   factorBullet: { fontSize: 16, color: '#14b8a6', fontWeight: '800', marginTop: -1 },
   factorText: { flex: 1, fontSize: 14, color: '#334155', lineHeight: 20, fontWeight: '500' },
   noteBanner: {
-    borderRadius: 14,
-    padding: 14,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  noteBannerText: { fontSize: 14, color: '#1e40af', lineHeight: 20, fontWeight: '600' },
-  pickCard: {
     borderRadius: 18,
-    padding: 16,
-    backgroundColor: '#fff',
+    padding: 14,
+    backgroundColor: 'rgba(224, 242, 254, 0.9)',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#7dd3fc',
+  },
+  noteBannerText: { fontSize: 14, color: '#075985', lineHeight: 20, fontWeight: '700' },
+  pickCard: {
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderLeftWidth: 5,
+    borderLeftColor: '#0ea5e9',
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -628,11 +711,13 @@ const styles = StyleSheet.create({
   groundedLabel: { fontSize: 11, fontWeight: '800', color: '#4338ca', textTransform: 'uppercase', letterSpacing: 0.5 },
   groundedText: { marginTop: 6, fontSize: 13, color: '#3730a3', lineHeight: 19, fontWeight: '500' },
   exerciseCard: {
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fbff',
+    borderColor: '#bae6fd',
+    backgroundColor: 'rgba(236, 254, 255, 0.95)',
+    borderLeftWidth: 5,
+    borderLeftColor: '#06b6d4',
     gap: 6,
   },
   exerciseHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
