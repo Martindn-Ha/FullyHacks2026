@@ -14,7 +14,12 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCgmSession, type RecommendationPickVm, type RecommendationResultsVm } from '../context/CgmSessionContext';
+import {
+  useCgmSession,
+  type ExerciseRecommendationVm,
+  type RecommendationPickVm,
+  type RecommendationResultsVm,
+} from '../context/CgmSessionContext';
 
 const seafloorBackground = require('../../assets/seafloor.png');
 
@@ -123,11 +128,46 @@ function PickCard({ pick, index }: { pick: RecommendationPickVm; index: number }
   );
 }
 
+function WeatherSummary({ data }: { data: RecommendationResultsVm['weather'] }) {
+  if (!data) return null;
+  const temp =
+    typeof data.apparentTemperatureC === 'number'
+      ? `${Math.round(data.apparentTemperatureC)}C (feels like)`
+      : typeof data.temperatureC === 'number'
+        ? `${Math.round(data.temperatureC)}C`
+        : null;
+  const wind = typeof data.windSpeedKmh === 'number' ? `${Math.round(data.windSpeedKmh)} km/h wind` : null;
+  const rain = typeof data.precipitationMm === 'number' ? `${data.precipitationMm.toFixed(1)} mm precip` : null;
+  const parts = [temp, wind, rain].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <View style={styles.noteBanner}>
+      <Text style={styles.noteBannerText}>Weather now: {parts.join(' · ')}</Text>
+    </View>
+  );
+}
+
+function ExerciseCard({ item, index }: { item: ExerciseRecommendationVm; index: number }) {
+  return (
+    <View style={styles.exerciseCard}>
+      <View style={styles.exerciseHeaderRow}>
+        <Text style={styles.exerciseIndex}>{index + 1}</Text>
+        <Text style={styles.exerciseTitle}>{item.title}</Text>
+      </View>
+      <Text style={styles.exerciseMeta}>
+        {item.minutes} min · {item.intensity} intensity · {item.indoorPreferred ? 'indoor preferred' : 'outdoor-friendly'}
+      </Text>
+      <Text style={styles.exerciseReason}>{item.reason}</Text>
+    </View>
+  );
+}
+
 function StructuredResults({ data }: { data: RecommendationResultsVm }) {
   return (
     <View style={styles.resultsBlock}>
       <Text style={styles.updatedAt}>Updated {data.updatedAt}</Text>
       <RiskPanel risk={data.risk} />
+      <WeatherSummary data={data.weather} />
       {data.note ? (
         <View style={styles.noteBanner}>
           <Text style={styles.noteBannerText}>{data.note}</Text>
@@ -142,6 +182,18 @@ function StructuredResults({ data }: { data: RecommendationResultsVm }) {
         <View style={styles.pickList}>
           {data.picks.map((p, i) => (
             <PickCard key={`${data.updatedAt}-${p.placeName}-${i}`} pick={p} index={i} />
+          ))}
+        </View>
+      )}
+      <Text style={styles.sectionHeading}>Exercise ideas</Text>
+      {data.exercise.length === 0 ? (
+        <View style={[styles.panel, styles.panelMuted]}>
+          <Text style={styles.mutedLine}>No exercise guidance was returned for this run.</Text>
+        </View>
+      ) : (
+        <View style={styles.pickList}>
+          {data.exercise.map((e, i) => (
+            <ExerciseCard key={`${data.updatedAt}-exercise-${i}`} item={e} index={i} />
           ))}
         </View>
       )}
@@ -575,4 +627,27 @@ const styles = StyleSheet.create({
   },
   groundedLabel: { fontSize: 11, fontWeight: '800', color: '#4338ca', textTransform: 'uppercase', letterSpacing: 0.5 },
   groundedText: { marginTop: 6, fontSize: 13, color: '#3730a3', lineHeight: 19, fontWeight: '500' },
+  exerciseCard: {
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    gap: 6,
+  },
+  exerciseHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  exerciseIndex: {
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    textAlign: 'center',
+    lineHeight: 22,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1d4ed8',
+    backgroundColor: '#dbeafe',
+  },
+  exerciseTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  exerciseMeta: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  exerciseReason: { fontSize: 14, color: '#334155', lineHeight: 20, fontWeight: '500' },
 });

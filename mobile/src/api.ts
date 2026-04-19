@@ -117,7 +117,22 @@ export type RecommendationResponse = {
     nutritionInfo?: string;
     groundedNote?: string;
   }[];
-  sources?: { places: string; guidance: string };
+  exerciseRecommendations?: {
+    title: string;
+    minutes: number;
+    intensity: 'low' | 'moderate';
+    reason: string;
+    indoorPreferred: boolean;
+  }[];
+  weather?: {
+    temperatureC: number | null;
+    apparentTemperatureC: number | null;
+    precipitationMm: number | null;
+    weatherCode: number | null;
+    windSpeedKmh: number | null;
+    isDay: boolean | null;
+  } | null;
+  sources?: { places: string; guidance: string; weather?: string };
   /** When spike risk is low, backend skips Maps/Gemini and explains why `recommendations` is empty. */
   recommendationsNote?: string;
   escalationMessage?: string;

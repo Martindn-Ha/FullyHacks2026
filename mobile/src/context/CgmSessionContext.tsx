@@ -36,11 +36,30 @@ export type RecommendationPickVm = {
   groundedNote?: string;
 };
 
+export type ExerciseRecommendationVm = {
+  title: string;
+  minutes: number;
+  intensity: 'low' | 'moderate';
+  reason: string;
+  indoorPreferred: boolean;
+};
+
 /** Structured last `/api/recommendations` payload for richer UI (still mirrored in `resultText`). */
 export type RecommendationResultsVm = {
   updatedAt: string;
   risk: { riskScore: number; severity: string; factors: string[] } | null;
   picks: RecommendationPickVm[];
+  exercise: ExerciseRecommendationVm[];
+  weather:
+    | {
+        temperatureC: number | null;
+        apparentTemperatureC: number | null;
+        precipitationMm: number | null;
+        weatherCode: number | null;
+        windSpeedKmh: number | null;
+        isDay: boolean | null;
+      }
+    | null;
   note?: string;
 };
 
@@ -309,6 +328,14 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
           nutritionInfo: r.nutritionInfo?.trim() || undefined,
           groundedNote: r.groundedNote?.trim() || undefined,
         })),
+        exercise: (data.exerciseRecommendations ?? []).map((r) => ({
+          title: r.title,
+          minutes: r.minutes,
+          intensity: r.intensity,
+          reason: r.reason,
+          indoorPreferred: r.indoorPreferred,
+        })),
+        weather: data.weather ?? null,
         note: note || undefined,
       });
       setTimeout(() => recommendationsScrollRef.current?.scrollToEnd({ animated: true }), 150);
