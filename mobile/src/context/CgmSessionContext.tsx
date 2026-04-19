@@ -23,6 +23,10 @@ import { DEFAULT_TIME_COMPRESSION, useSimulatedCgmPlayback } from '../clarity/us
 const AUTO_RECS_PREDICTED_MAX_MG_DL = 180;
 /** Prediction must stay at/below threshold at least this long before a new high can trigger auto recommendations (ignores brief dips). */
 const AUTO_RECS_MIN_BELOW_THRESHOLD_MS = 5 * 60 * 1000;
+/** Log a spike event when displayed CGM is strictly above this (mg/dL). */
+const GLUCOSE_SPIKE_LOG_MG_DL = 180;
+/** After logging, allow another log only after glucose falls below this (mg/dL). */
+const GLUCOSE_SPIKE_LOG_REARM_MG_DL = 170;
 
 function isFiniteLatLng(o: unknown): o is { latitude: number; longitude: number } {
   if (!o || typeof o !== 'object') return false;
@@ -67,6 +71,15 @@ export type RecommendationResultsVm = {
   note?: string;
 };
 
+/** One row in the Events tab when displayed glucose crosses the spike threshold (actual mg/dL only). */
+export type GlucoseSpikeEventVm = {
+  id: string;
+  atMs: number;
+  glucoseMgDl: number;
+  latitude: number | null;
+  longitude: number | null;
+};
+
 type CgmSessionContextValue = {
   glucosePoints: GlucosePoint[];
   demoGlucoseDataset: ClarityDemoDataset;
@@ -98,6 +111,8 @@ type CgmSessionContextValue = {
   mlSpikeThresholdMgDl: number | null;
   mlSpikeHorizonMinutes: number | null;
   mlSpikeNote: string | null;
+  /** Newest first; capped in memory. */
+  glucoseSpikeEvents: GlucoseSpikeEventVm[];
 };
 
 const CgmSessionContext = createContext<CgmSessionContextValue | null>(null);
@@ -139,6 +154,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const [mlSpikeThresholdMgDl, setMlSpikeThresholdMgDl] = useState<number | null>(null);
   const [mlSpikeHorizonMinutes, setMlSpikeHorizonMinutes] = useState<number | null>(null);
   const [mlSpikeNote, setMlSpikeNote] = useState<string | null>(null);
+  const [glucoseSpikeEvents, setGlucoseSpikeEvents] = useState<GlucoseSpikeEventVm[]>([]);
   const recommendationsScrollRef = useRef<ScrollView>(null);
   const autoRecsFromPredictionLatchRef = useRef(false);
   /** When latched, first time we see pred ≤ threshold; used to require sustained “low” before re-arming. */
@@ -147,6 +163,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
   const spikeNotifyLatchRef = useRef(false);
   const spikeNotifyDipBelowSinceMsRef = useRef<number | null>(null);
   const spikeNotifyInFlightRef = useRef(false);
+  const glucoseSpikeEventLoggedLatchRef = useRef(false);
 
   /** `playbackT` updates every frame during replay; do not put it in effect deps or the debounce never fires. */
   const playbackTRef = useRef(playbackT);
@@ -531,6 +548,28 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
     })();
   }, [mlSpikeReady, mlPredictedMaxMgDl, mlSpikeHorizonMinutes, recommendationResults, playbackT]);
 
+  /** Log spike to Events when displayed CGM crosses high; uses current lat/lng from session (e.g. Home defaults or last GPS). */
+  useEffect(() => {
+    const g = displayMgdl;
+    if (!Number.isFinite(g)) return;
+
+    if (g > GLUCOSE_SPIKE_LOG_MG_DL && !glucoseSpikeEventLoggedLatchRef.current) {
+      glucoseSpikeEventLoggedLatchRef.current = true;
+      const la = Number(lat);
+      const lo = Number(lng);
+      const row: GlucoseSpikeEventVm = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        atMs: Date.now(),
+        glucoseMgDl: Math.round(g),
+        latitude: Number.isFinite(la) ? la : null,
+        longitude: Number.isFinite(lo) ? lo : null,
+      };
+      setGlucoseSpikeEvents((prev) => [row, ...prev].slice(0, 100));
+    } else if (g < GLUCOSE_SPIKE_LOG_REARM_MG_DL) {
+      glucoseSpikeEventLoggedLatchRef.current = false;
+    }
+  }, [displayMgdl, lat, lng, playbackT]);
+
   const value = useMemo(
     () =>
       ({
@@ -560,6 +599,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
         mlSpikeThresholdMgDl,
         mlSpikeHorizonMinutes,
         mlSpikeNote,
+        glucoseSpikeEvents,
       }) satisfies CgmSessionContextValue,
     [
       glucosePoints,
@@ -580,6 +620,7 @@ export function CgmSessionProvider({ children }: { children: ReactNode }) {
       mlSpikeThresholdMgDl,
       mlSpikeHorizonMinutes,
       mlSpikeNote,
+      glucoseSpikeEvents,
       useDeviceLocation,
       requestRecommendations,
     ],
