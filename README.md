@@ -4,6 +4,8 @@
 
 **Tide Together** is a **FullyHacks 2026** project built to explore how software can support day-to-day **glucose self-management** in a practical, demo-friendly way. The goal is to help someone who may be heading toward a **post-meal spike** make a **better nearby food choice** with clear, grounded explanations—and to **loop in a trusted contact** when the person wants to share how they are doing (including optional symptoms) via **SMS**.
 
+Many diabetes and CGM companion apps are built around **logging, thresholds, and hindsight**: they excel at showing what already happened, but usually **do not surface credible near-term risk**—so there is **little room for predictive intervention** (timely nudges *before* a spike or bad choice fully materializes). They are also often **not context-aware in the moment**: **symptoms**, how the person feels, **activity**, and **where they are** rarely feed one combined decision. This prototype is a small experiment in **risk-forward, context-rich** support—spike estimation, **place-aware** meal options, retrieval-backed rationale, and optional outreach.
+
 The app keeps **prediction, safety rules, ranking, and escalation** on our side. **Human Delta** acts as a **retrieval layer** (menus, nutrition snippets, indexed education pages) so suggestions and narratives can reference real content instead of generic guesses. **Gemini** helps turn that material into readable meal guidance and check-in messages. Nothing here replaces a care team or professional advice; it is a **hackathon prototype**, not a medical product.
 
 Deeper product and integration notes: `hackathon_diabetes_app_human_delta_brief.txt`.
