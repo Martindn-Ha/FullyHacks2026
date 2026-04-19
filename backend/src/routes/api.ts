@@ -1,5 +1,5 @@
 import express from 'express';
-import type { UserContext } from '../types.js';
+import type { Severity, UserContext } from '../types.js';
 import { assessSpikeRisk } from '../services/riskEngine.js';
 import { evaluateSafety } from '../services/safetyRules.js';
 import { findNearbyRestaurants } from '../services/googleMapsClient.js';
@@ -7,8 +7,10 @@ import {
   buildPlaceholderGuidance,
   retrieveMenuGuidance,
 } from '../services/humanDeltaClient.js';
+import { synthesizeGuidanceWithGemini } from '../services/llmGuidanceSynthesis.js';
 import { rankFoodRecommendations } from '../services/recommendationEngine.js';
 import { IntegrationError } from '../services/integrationError.js';
+import { tryReadClarityDemoCsv } from '../services/clarityDemoCsv.js';
 
 export const apiRouter = express.Router();
 
@@ -21,11 +23,34 @@ function trimEnv(value: string | undefined): string | undefined {
   return v || undefined;
 }
 
+function envTruthy(value: string | undefined): boolean {
+  const v = (value ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 function readEnv() {
   return {
     googleMapsApiKey: trimEnv(process.env.GOOGLE_MAPS_API_KEY),
     humanDeltaApiUrl: trimEnv(process.env.HUMAN_DELTA_API_URL),
     humanDeltaApiKey: trimEnv(process.env.HUMAN_DELTA_API_KEY),
+    /** Vertex / Cloud API key for Gemini HTTP calls; legacy: GEMINI_API_KEY, GOOGLE_API_KEY. */
+    vertexGeminiApiKey: trimEnv(
+      process.env.VERTEX_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
+    ),
+    geminiModel: trimEnv(process.env.GEMINI_MODEL),
+    geminiUseVertex: envTruthy(process.env.GEMINI_USE_VERTEX),
+    /** Prefer with Vertex API keys — avoids some us-central1-only 404s. Numeric or string project id from GCP. */
+    vertexProjectId: trimEnv(
+      process.env.GEMINI_VERTEX_PROJECT_ID ||
+        process.env.GOOGLE_CLOUD_PROJECT ||
+        process.env.GCLOUD_PROJECT,
+    ),
+    vertexLocation: trimEnv(process.env.GEMINI_VERTEX_LOCATION),
+    /**
+     * When true, `/api/recommendations` never short-circuits on low spike risk and the response risk
+     * is bumped to moderate for UI/testing. Remove before demo/production.
+     */
+    devBypassLowRiskRecommendationsGate: envTruthy(process.env.DEV_BYPASS_LOW_RISK_RECOMMENDATIONS_GATE),
   };
 }
 
@@ -41,6 +66,15 @@ function integrationResponse(res: express.Response, err: unknown, route: string)
   }
   return res.status(500).json({ error: message });
 }
+
+/** Raw Clarity / Stelo-style CSV from repo `dummydata/` for the mobile simulator graph (optional). */
+apiRouter.get('/clarity-demo', (_req, res) => {
+  const raw = tryReadClarityDemoCsv();
+  if (!raw) {
+    return res.status(404).type('text/plain').send('No CSV found in dummydata/.');
+  }
+  res.type('text/csv; charset=utf-8').send(raw);
+});
 
 apiRouter.post('/risk-assessment', (req, res) => {
   const body = req.body as Partial<UserContext>;
@@ -183,8 +217,40 @@ apiRouter.post('/recommendations', async (req, res) => {
       });
     }
 
-    const risk = assessSpikeRisk(context);
+    let risk = assessSpikeRisk(context);
     const env = readEnv();
+
+    if (env.devBypassLowRiskRecommendationsGate && risk.severity === 'low') {
+      const sev: Severity = 'moderate';
+      console.warn(
+        '[api recommendations] DEV_BYPASS_LOW_RISK_RECOMMENDATIONS_GATE: forcing moderate severity for testing.',
+      );
+      risk = {
+        riskScore: Math.max(risk.riskScore, 0.4),
+        severity: sev,
+        factors: [
+          ...risk.factors,
+          '(dev) Low-risk gate bypassed — unset DEV_BYPASS_LOW_RISK_RECOMMENDATIONS_GATE in backend/.env for real behavior.',
+        ],
+      };
+    }
+
+    if (risk.severity === 'low') {
+      return res.json({
+        safety,
+        risk: {
+          riskScore: risk.riskScore,
+          severity: risk.severity,
+          factors: risk.factors,
+        },
+        recommendations: [],
+        sources: { places: 'none', guidance: 'none' },
+        recommendationsNote:
+          'Meal picks are only returned when near-term spike risk is moderate or higher. Your inputs look stable enough that we are not suggesting specific restaurants here.',
+        disclaimer:
+          'This MVP suggests practical meal patterns near you. It is not a diagnosis, not guaranteed treatment advice, and does not replace clinician guidance.',
+      });
+    }
 
     if (!env.googleMapsApiKey?.trim()) {
       const msg =
@@ -200,9 +266,22 @@ apiRouter.post('/recommendations', async (req, res) => {
       apiKey: env.googleMapsApiKey,
     });
 
-    let guidanceSource: 'human_delta' | 'placeholder' | 'none' = 'none';
+    let guidanceSource: 'human_delta_llm' | 'none' = 'none';
     let guidance: Awaited<ReturnType<typeof retrieveMenuGuidance>> = [];
     if (nearby.places.length > 0) {
+      if (!env.vertexGeminiApiKey?.trim()) {
+        throw new IntegrationError(
+          'VERTEX_GEMINI_API_KEY (or legacy GEMINI_API_KEY / GOOGLE_API_KEY) is required for recommendations — Gemini is not optional.',
+          503,
+        );
+      }
+      if (env.geminiUseVertex && !env.vertexProjectId?.trim()) {
+        throw new IntegrationError(
+          'GEMINI_VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required when GEMINI_USE_VERTEX=true (GCP project id or numeric project id from console / error logs).',
+          503,
+        );
+      }
+
       if (env.humanDeltaApiUrl?.trim()) {
         guidance = await retrieveMenuGuidance({
           places: nearby.places,
@@ -210,14 +289,24 @@ apiRouter.post('/recommendations', async (req, res) => {
           apiUrl: env.humanDeltaApiUrl,
           apiKey: env.humanDeltaApiKey,
         });
-        guidanceSource = 'human_delta';
       } else {
         guidance = buildPlaceholderGuidance(nearby.places);
-        guidanceSource = 'placeholder';
         console.log(
-          '[api recommendations] HUMAN_DELTA_API_URL unset; using placeholder guidance (Google-only dev mode).',
+          '[api recommendations] HUMAN_DELTA_API_URL unset; Gemini still runs on placeholder + venue names.',
         );
       }
+
+      guidance = await synthesizeGuidanceWithGemini({
+        apiKey: env.vertexGeminiApiKey,
+        model: env.geminiModel,
+        useVertex: env.geminiUseVertex,
+        vertexProjectId: env.vertexProjectId,
+        vertexLocation: env.vertexLocation,
+        places: nearby.places,
+        guidance,
+        riskLine: `spike risk=${risk.riskScore.toFixed(2)} severity=${risk.severity}; prefer lower-glycemic-style items`,
+      });
+      guidanceSource = 'human_delta_llm';
     }
 
     const recommendations = rankFoodRecommendations({

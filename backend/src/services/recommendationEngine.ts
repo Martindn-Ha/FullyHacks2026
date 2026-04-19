@@ -59,19 +59,35 @@ export function rankFoodRecommendations(params: {
     }
     const passageText = g.passages.map((p) => p.text).join(' ').trim();
     const primary = g.passages[0].text;
-    const suggestedItem = pickSuggestedItem(primary, place.name);
+    const suggestedItem = g.llmPresentation?.suggestedItem ?? pickSuggestedItem(primary, place.name);
     const src = g.passages[0].source;
-    const groundedNote =
-      src === 'human_delta'
-        ? 'Grounded by indexed menu guidance (Human Delta).'
-        : 'Human Delta disabled: generic meal-pattern hint only (Google testing). Not indexed menu data.';
+    const passageTextForScore =
+      [
+        passageText,
+        g.llmPresentation?.explanation ?? '',
+        g.llmPresentation?.nutritionInfo ?? '',
+      ]
+        .join(' ')
+        .trim() || primary;
+    const groundedNote = g.llmPresentation
+      ? undefined
+      : src === 'human_delta'
+        ? 'Grounded by indexed menu snippets when available.'
+        : src === 'human_delta_empty'
+          ? 'No indexed menu matches for this query; generic meal-pattern hints only.'
+          : 'Generic meal-pattern hint only (no indexed menu data for this venue).';
 
     candidates.push({
       place,
       suggestedItem,
-      explanation: buildExplanation({ severity, distanceM: place.distanceM, passageText: passageText || primary }),
-      groundedNote,
-      score: scoreOption({ distanceM: place.distanceM, severity, passageText: passageText || primary }),
+      explanation: g.llmPresentation
+        ? g.llmPresentation.explanation.trim()
+        : buildExplanation({ severity, distanceM: place.distanceM, passageText: passageText || primary }),
+      ...(g.llmPresentation?.nutritionInfo?.trim()
+        ? { nutritionInfo: g.llmPresentation.nutritionInfo.trim() }
+        : {}),
+      ...(groundedNote ? { groundedNote } : {}),
+      score: scoreOption({ distanceM: place.distanceM, severity, passageText: passageTextForScore }),
     });
   }
 

@@ -37,8 +37,8 @@ Server listens on **`0.0.0.0`** and **`PORT`** (default **3000**) so other devic
 - **`PORT`** — API port (default `3000`).
 - **`GOOGLE_MAPS_API_KEY`** — Required. Used with **Places API (New)** (`POST https://places.googleapis.com/v1/places:searchNearby`, headers `X-Goog-Api-Key` and `X-Goog-FieldMask`). Enable **Places API (New)** in the same Google Cloud project as the key, with **billing** enabled.
 - **API key restrictions** — For this **Node** server, do **not** use a key restricted only to **iOS apps**, **Android apps**, or **HTTP referrers**. Use **None** while developing, or **IP addresses** for a fixed server. Wrong restrictions cause `PERMISSION_DENIED` / `API_KEY_INVALID`.
-- **`HUMAN_DELTA_API_URL`** — Optional. If unset, recommendations still run using **generic placeholder** text per place (`sources.guidance`: `"placeholder"`). If set, the backend POSTs JSON and expects structured passages for **every** returned Google `place_id` (see `.env.example`).
-- **`HUMAN_DELTA_API_KEY`** — Optional; sent as `Authorization: Bearer <key>` when set.
+- **`HUMAN_DELTA_API_URL`** — Optional. If unset, recommendations still run using **generic placeholder** text per place (`sources.guidance`: `"placeholder"`). If set to Human Delta’s **`POST /v1/search`** URL (**`https://api.humandelta.ai/v1/search`**, per [Human Delta Developer Platform](https://dev.humandelta.ai/docs/intro)), the backend sends a **search-shaped** `query` and maps common search JSON into guidance. Other URLs can still use the custom `{ query, places }` → `{ items|results: [{ placeId, passages }] }` contract (see `.env.example`).
+- **`HUMAN_DELTA_API_KEY`** — Optional; sent as **`Authorization: Bearer <key>`** when set (docs show keys like `hd_live_…`).
 
 ### Scripts
 
