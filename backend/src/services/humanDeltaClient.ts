@@ -4,6 +4,47 @@ import { IntegrationError } from './integrationError.js';
 
 const HUMAN_DELTA_FETCH_TIMEOUT_MS = 90_000;
 
+/**
+ * Optional fields for official `POST /v1/search` (see repo `Human_delta_rest_api.txt`):
+ * `top_k`, `sources`, `index_id`. Gemini is not called by Human Delta — you retrieve here, then pass
+ * chunks into Vertex/Gemini in `synthesizeGuidanceWithGemini`.
+ */
+function officialSearchBodyFromEnv(): {
+  top_k: number;
+  sources?: string[];
+  index_id?: string;
+} {
+  const out: { top_k: number; sources?: string[]; index_id?: string } = { top_k: 10 };
+  const tk = process.env.HUMAN_DELTA_TOP_K?.trim();
+  if (tk) {
+    const n = Number(tk);
+    if (Number.isFinite(n)) {
+      out.top_k = Math.min(20, Math.max(1, Math.round(n)));
+    }
+  }
+  const iid = process.env.HUMAN_DELTA_INDEX_ID?.trim();
+  if (iid) {
+    out.index_id = iid;
+  }
+  const src = process.env.HUMAN_DELTA_SOURCES?.trim();
+  if (src) {
+    if (src.startsWith('[')) {
+      try {
+        const j = JSON.parse(src) as unknown;
+        if (Array.isArray(j) && j.every((x) => typeof x === 'string')) {
+          out.sources = j as string[];
+        }
+      } catch {
+        /* ignore invalid JSON */
+      }
+    }
+    if (!out.sources) {
+      out.sources = src.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  return out;
+}
+
 /** Official Human Delta REST search from their API reference (Base: https://api.humandelta.ai). */
 function isHumanDeltaOfficialSearchUrl(apiUrl: string): boolean {
   try {
@@ -14,10 +55,20 @@ function isHumanDeltaOfficialSearchUrl(apiUrl: string): boolean {
   }
 }
 
+/** When set, `rankFoodRecommendations` prefers these strings over raw retrieval + keyword templates. */
+export type LlmGuidancePresentation = {
+  suggestedItem: string;
+  /** One short sentence from Gemini (spike-risk rationale). */
+  explanation: string;
+  /** Calories/macros from CONTEXT only when present; otherwise omitted or “not in snippet”. */
+  nutritionInfo?: string;
+};
+
 export type PlaceGuidanceRow = {
   placeId: string;
   placeName: string;
   passages: MenuPassage[];
+  llmPresentation?: LlmGuidancePresentation;
 };
 
 export async function retrieveMenuGuidance(params: {
@@ -46,6 +97,7 @@ export async function retrieveMenuGuidance(params: {
 
   const url = apiUrl.trim();
   const useOfficialSearch = isHumanDeltaOfficialSearchUrl(url);
+  const hdSearch = officialSearchBodyFromEnv();
   const body = useOfficialSearch
     ? {
         query: [
@@ -54,6 +106,9 @@ export async function retrieveMenuGuidance(params: {
           'Nearby venues (Google place_id → name):',
           ...places.map((p) => `- ${p.id}: ${p.name}${p.vicinity ? ` — ${p.vicinity}` : ''}`),
         ].join('\n'),
+        top_k: hdSearch.top_k,
+        ...(hdSearch.sources?.length ? { sources: hdSearch.sources } : {}),
+        ...(hdSearch.index_id ? { index_id: hdSearch.index_id } : {}),
       }
     : {
         query: queryHint,

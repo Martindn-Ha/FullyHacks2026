@@ -41,6 +41,8 @@ export type FoodRecommendation = {
   place: PlaceCandidate;
   suggestedItem: string;
   explanation: string;
+  /** From Gemini when CONTEXT had nutrition facts; omit if unknown. */
+  nutritionInfo?: string;
   groundedNote?: string;
   score: number;
 };
