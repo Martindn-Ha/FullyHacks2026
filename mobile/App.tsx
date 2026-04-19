@@ -11,6 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import {
   fetchClarityDemoCsv,
@@ -26,9 +27,21 @@ import {
 import { GlucoseStripChart } from './src/components/GlucoseStripChart';
 
 export default function App() {
-  const { width: winW } = useWindowDimensions();
-  /** Scroll horizontal padding (18×2) + CGM card padding (14×2) — chart must fit inside the white card. */
-  const chartW = Math.max(220, winW - 36 - 28);
+  const { width: winW, height: winH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
+  /** Scroll horizontal padding (14×2) + card padding (12×2). */
+  const chartW = Math.max(220, winW - 28 - 24);
+  /**
+   * Strip SVG height (GlucoseStripChart also adds ~36px axis row below SVG).
+   * `VERTICAL_CHROME` = scroll padding + top bar + card padding/gaps/stats + primary button + margins.
+   */
+  const chartH = useMemo(() => {
+    if (!winH) return 280;
+    const inner = winH - insets.top - insets.bottom;
+    const VERTICAL_CHROME = 16 + 44 + 12 + 36 + 8 + 54 + 12 + 10 + 58 + 12;
+    return Math.max(220, Math.min(580, Math.floor(inner - VERTICAL_CHROME)));
+  }, [winH, insets.top, insets.bottom]);
 
   const [glucosePoints, setGlucosePoints] = useState<GlucosePoint[]>([]);
   const [demoGlucoseDataset, setDemoGlucoseDataset] = useState<ClarityDemoDataset>('nondiabetic');
@@ -147,45 +160,49 @@ export default function App() {
   }, [playbackT]);
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <StatusBar style="dark" />
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={styles.scroll}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>Sugar Moonshot</Text>
+        <View style={styles.topBar}>
+          <Text style={styles.titleCompact}>Sugar Moonshot</Text>
+          <Pressable onPress={() => setShowChartSettings((s) => !s)} hitSlop={10}>
+            <Text style={styles.demoSettingsLink}>
+              {showChartSettings ? 'Hide demo' : 'Demo settings'}
+            </Text>
+          </Pressable>
+        </View>
 
         <View style={styles.cgmCard}>
-          <View style={styles.cgmTopRow}>
-            <View>
-              <Text style={styles.cgmValue}>{displayMgdl}</Text>
-              <Text style={styles.cgmUnit}>mg/dL · {trend}</Text>
-            </View>
-            <View style={styles.cgmMeta}>
-              <Text style={styles.cgmMetaText}>{clockLabel}</Text>
-            </View>
-          </View>
           {glucosePoints.length >= 8 ? (
             <GlucoseStripChart
               points={glucosePoints}
               playbackT={playbackT}
               width={chartW}
-              height={172}
+              height={chartH}
               targetBandLow={70}
               targetBandHigh={targetBandHigh}
               demoGlucoseDataset={demoGlucoseDataset}
             />
           ) : (
-            <Text style={styles.cgmLoading}>Preparing graph…</Text>
+            <View style={[styles.graphPlaceholder, { width: chartW, minHeight: chartH }]}>
+              <Text style={styles.cgmLoading}>Preparing graph…</Text>
+            </View>
           )}
+          <View style={styles.cgmStatsBar}>
+            <View style={styles.cgmStatsLeft}>
+              <Text style={styles.cgmValueCompact}>{displayMgdl}</Text>
+              <Text style={styles.cgmUnitCompact}>mg/dL · {trend}</Text>
+            </View>
+            <Text style={styles.cgmClockCompact} numberOfLines={2}>
+              {clockLabel}
+            </Text>
+          </View>
         </View>
-
-        <Pressable onPress={() => setShowChartSettings((s) => !s)} style={styles.advancedToggle}>
-          <Text style={styles.advancedToggleText}>
-            {showChartSettings ? 'Hide Demo settings' : 'Demo settings'}
-          </Text>
-        </Pressable>
 
         {showChartSettings ? (
           <>
@@ -276,8 +293,24 @@ export default function App() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f6f8fb' },
-  scroll: { padding: 18, paddingBottom: 36, gap: 8 },
-  title: { fontSize: 26, fontWeight: '700', color: '#0b1f3a', marginTop: 10 },
+  scrollView: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 12,
+    gap: 6,
+    flexGrow: 1,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 0,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+  },
+  titleCompact: { fontSize: 17, fontWeight: '800', color: '#0b1f3a', letterSpacing: -0.3 },
+  demoSettingsLink: { fontSize: 14, fontWeight: '700', color: '#1f6feb' },
   subtitle: { fontSize: 14, color: '#3a4a63', lineHeight: 20, marginBottom: 4 },
   apiHint: {
     fontSize: 12,
@@ -286,21 +319,41 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
   },
   cgmCard: {
-    marginTop: 6,
+    marginTop: 4,
     backgroundColor: '#fff',
     borderRadius: 18,
     borderWidth: 1,
     borderColor: '#e5eaf3',
-    padding: 14,
-    gap: 10,
+    padding: 12,
+    gap: 8,
     overflow: 'hidden',
   },
-  cgmTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  cgmValue: { fontSize: 44, fontWeight: '800', color: '#0b1f3a', letterSpacing: -1 },
-  cgmUnit: { fontSize: 14, fontWeight: '600', color: '#3a4a63', marginTop: 2, textTransform: 'capitalize' },
-  cgmMeta: { alignItems: 'flex-end', maxWidth: '52%' },
-  cgmMetaText: { fontSize: 13, fontWeight: '700', color: '#22324d' },
-  cgmLoading: { paddingVertical: 24, textAlign: 'center', color: '#5c6b82' },
+  graphPlaceholder: {
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+  },
+  cgmStatsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingTop: 4,
+    paddingHorizontal: 2,
+  },
+  cgmStatsLeft: { flexShrink: 1 },
+  cgmValueCompact: { fontSize: 32, fontWeight: '800', color: '#0b1f3a', letterSpacing: -0.8 },
+  cgmUnitCompact: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  cgmClockCompact: { fontSize: 12, fontWeight: '700', color: '#64748b', textAlign: 'right', maxWidth: '42%' },
+  cgmLoading: { fontSize: 14, color: '#5c6b82', fontWeight: '600' },
   speedLabel: { marginTop: 12, fontSize: 13, fontWeight: '700', color: '#22324d' },
   speedPresets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   speedChip: {
@@ -331,8 +384,6 @@ const styles = StyleSheet.create({
   },
   speedFineBtnText: { fontWeight: '700', color: '#1f6feb', fontSize: 13 },
   speedFineValue: { fontSize: 16, fontWeight: '800', color: '#0b1f3a', minWidth: 56, textAlign: 'center' },
-  advancedToggle: { alignSelf: 'flex-start', marginTop: 4, paddingVertical: 8 },
-  advancedToggleText: { color: '#1f6feb', fontWeight: '700', fontSize: 14 },
   label: { marginTop: 10, fontSize: 13, fontWeight: '600', color: '#22324d' },
   input: {
     marginTop: 6,
@@ -359,7 +410,7 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { color: '#1f6feb', fontWeight: '700' },
   primaryBtn: {
-    marginTop: 14,
+    marginTop: 10,
     backgroundColor: '#1f6feb',
     borderRadius: 14,
     paddingVertical: 14,
