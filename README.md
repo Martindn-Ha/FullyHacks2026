@@ -1,76 +1,95 @@
-# FullyHacks 2026 — Diabetes support (Expo + Express)
+# FullyHacks 2026 — Tide Together (Expo + Express.js)
 
-Hackathon app: **rules-based spike-risk estimate**, **Google Places (New)** for nearby restaurants, optional **Human Delta**–style menu retrieval (or **placeholder** mode when the URL is unset), then ranked **top 3** meal suggestions. Not medical advice.
+## Purpose
 
-Product spec notes: `hackathon_diabetes_app_human_delta_brief.txt`.
+**Tide Together** is a **FullyHacks 2026** project built to explore how software can support day-to-day **glucose self-management** in a practical, demo-friendly way. The goal is to help someone who may be heading toward a **post-meal spike** make a **better nearby food choice** with clear, grounded explanations—and to **loop in a trusted contact** when the person wants to share how they are doing (including optional symptoms) via **SMS**.
 
-## Repo layout
+Many diabetes and CGM companion apps are built around **logging, thresholds, and hindsight**: they excel at showing what already happened, but usually **do not surface credible near-term risk**—so there is **little room for predictive intervention** (timely nudges *before* a spike or bad choice fully materializes). They are also often **not context-aware in the moment**: **symptoms**, how the person feels, **activity**, and **where they are** rarely feed one combined decision. This prototype is a small experiment in **risk-forward, context-rich** support—spike estimation, **place-aware** meal options, retrieval-backed rationale, and optional outreach.
 
-| Path | Role |
-|------|------|
-| `mobile/` | Expo (React Native) app — collects context, calls the API, shows results |
-| `backend/` | Express API — Google Places, optional Human Delta client, ranking, safety rules |
+The app keeps **prediction, safety rules, ranking, and escalation** on our side. **Human Delta** acts as a **retrieval layer** (menus, nutrition snippets, indexed education pages) so suggestions and narratives can reference real content instead of generic guesses. **Gemini** helps turn that material into readable meal guidance and check-in messages. Nothing here replaces a care team or professional advice; it is a **hackathon prototype**, not a medical product.
 
-## Prerequisites
+Deeper product and integration notes: `hackathon_diabetes_app_human_delta_brief.txt`.
 
-- **Node.js** (v18+ recommended; project tested on v24)
-- **npm**
-- **Expo Go** on a physical phone (SDK matches `mobile/package.json`, e.g. Expo 54)
-- **Google Cloud** project with **Places API (New)** enabled, **billing** on, and an API key suitable for **server-side** use (see below)
-- Optional: **Human Delta** HTTP endpoint for real menu passages
-- Optional: **cloudflared** (pulled via `npx` when you run the scripts below) for public HTTPS URLs when **client isolation** (e.g. **eduroam**) prevents the phone from reaching your Mac on the local network, or when `expo start --tunnel` is unreliable
+## Layout
 
-## Quick start (two terminals)
+| Directory | Purpose |
+|-----------|---------|
+| `mobile/` | Expo app — UI, SMS preset, calls backend |
+| `backend/` | Express.js API — Places, Human Delta, Gemini, rules |
 
-**Terminal 1 — API**
+## Tech stack
+
+| Area | What we use |
+|------|----------------|
+| **Mobile** | [Expo](https://expo.dev/) (React Native), **TypeScript**, React Navigation, AsyncStorage; Expo modules (e.g. Location, SMS, Notifications) |
+| **Backend** | **Node.js**, **Express.js**, **TypeScript** (dev: `tsx`); orchestrates risk rules, Places, Human Delta, Gemini |
+| **Maps** | **Google Places API (New)** — nearby search from the server |
+| **Retrieval** | **Human Delta** — `POST /v1/search` for indexed menus / web / docs (optional) |
+| **LLM** | **Google Gemini** — Vertex AI (default in `.env.example`) or Google AI Studio (`GEMINI_USE_VERTEX=false`) for meal synthesis and SMS check-in copy |
+| **ML (optional)** | **Python** + `ml_model/` — spike regression when env points at the infer script (see `backend/.env.example`) |
+| **Dev / network** | **npm**; optional **[Cloudflare](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) quick tunnels** (`cloudflared` via `npx`) so phones reach Metro and the API on restrictive Wi‑Fi |
+
+## Requirements
+
+- Node **18+** (tested on **24**), **npm**
+- **Expo Go** on a phone (SDK matches `mobile/package.json`, e.g. Expo 54)
+- Google Cloud: **Places API (New)** + **billing**, key usable **server-side** (see env notes below)
+- Optional: [Human Delta](https://dev.humandelta.ai/docs/intro) `POST /v1/search` for retrieval
+- Optional: **cloudflared** (via `npx`) for tunnels when the phone cannot reach your Mac on LAN
+
+## Run locally
+
+**1. Backend**
 
 ```bash
-cd backend
-cp .env.example .env
-# Edit .env: GOOGLE_MAPS_API_KEY required; HUMAN_DELTA_* optional
-npm install
-npm run dev
+cd backend && cp .env.example .env
+# Set at least GOOGLE_MAPS_API_KEY; add Vertex/Gemini + Human Delta per .env.example
+npm install && npm run dev
 ```
 
-For a **physical phone** on **eduroam / guest / isolated Wi‑Fi**, also run **`npm run tunnel`** in **`backend/`** and put the printed **`https://….trycloudflare.com`** into **`mobile/.env`** as **`EXPO_PUBLIC_API_BASE_URL`** (no trailing slash).
-
-**Terminal 2 — Expo**
+**2. Mobile**
 
 ```bash
-cd mobile
-cp .env.example .env
-# Set EXPO_PUBLIC_API_BASE_URL (tunnel URL from backend if the phone cannot use your LAN IP)
-npm install
-npm run start:cloudflare
+cd mobile && cp .env.example .env
+# Set EXPO_PUBLIC_API_BASE_URL (see Networking)
+npm install && npm run start:cloudflare
 ```
 
-**If you used `npm run start:tunnel` and see `failed to start tunnel` / `remote gone away`:** (1) **Always do this first** from **`mobile/`**: **`rm -rf node_modules && npm install`**, then retry tunnel if you still need it (use **`npx expo start --tunnel`**; same as `npm run start:tunnel`, but has been more reliable here). (2) Prefer **`npm run start:cloudflare`** (above) or **`npm run start:lan`** on open home Wi‑Fi so you are not dependent on ngrok. (3) If you use Homebrew ngrok: reinstall + **`ngrok config add-authtoken`**. Full ordered list: **Troubleshooting** → **`expo start --tunnel` / `remote gone away`**.
+Use **`npm run start:lan`** only if the phone can open your Mac’s LAN IP (typical home Wi‑Fi). On **eduroam / guest / AP isolation**, prefer **`start:cloudflare`** for Metro and a **backend** tunnel for the API (below).
 
-Open **Expo Go** and scan the QR code from the Expo terminal.
+Open **Expo Go** and scan the QR code.
 
-**Simulator on the same Mac** (no tunnels): from **`mobile/`**, use **`npx expo start`** and press **`i`** / **`a`** — use **`http://localhost:3000`** in **`EXPO_PUBLIC_API_BASE_URL`**.
+**Simulator on the same machine:** `npx expo start` from `mobile/`, then `i` / `a`; set **`EXPO_PUBLIC_API_BASE_URL`** to `http://localhost:3000` (Android emulator: `http://10.0.2.2:3000`).
 
-After changing **`mobile/.env`**, restart Expo ( **`--clear`** if the bundle still shows old env, e.g. `npx expo start --lan --clear` when not using **`start:cloudflare`**).
+After changing **`mobile/.env`**, restart Expo (`--clear` if the bundle still shows old values).
+
+## Networking
+
+The app calls **`{EXPO_PUBLIC_API_BASE_URL}/api/...`** (no trailing slash). The UI shows the resolved base URL.
+
+| Scenario | `EXPO_PUBLIC_API_BASE_URL` |
+|----------|----------------------------|
+| iOS Simulator on Mac | `http://localhost:3000` |
+| Android emulator | `http://10.0.2.2:3000` |
+| Physical device, same open Wi‑Fi | `http://<Mac-LAN-IP>:3000` — backend logs print `/health` URLs on start (`ipconfig getifaddr en0` on Mac) |
+| Phone cannot reach Mac (isolation, cellular-only dev, etc.) | Run **`npm run tunnel`** in **`backend/`** (Cloudflare quick tunnel to API) and paste the printed **`https://….trycloudflare.com`** here |
+
+**Do not** use `localhost` / `127.0.0.1` on a **physical phone** — that is the phone itself.
+
+**`npm run start:cloudflare`** (mobile): tunnels Metro so the bundle loads over HTTPS; it sets **`EXPO_PACKAGER_PROXY_URL`** for the dev client. That is separate from the **API** URL above.
 
 ## Backend
 
-Server listens on **`0.0.0.0`** and **`PORT`** (default **3000**) so other devices on the LAN can connect. On startup it logs **LAN** URLs like `http://<your-en0-ip>:3000/health`.
+- Listens on **`0.0.0.0`**, **`PORT`** (default **3000**).
+- Env: **`backend/.env.example`** (Google key, optional Human Delta, **Vertex Gemini** or AI Studio, optional ML spike script paths, dev flags).
 
-### `backend/.env` (see `backend/.env.example`)
+**Google key:** unrestricted or **IP** restriction for this Node host — not iOS/Android/referrer-only keys (those cause `PERMISSION_DENIED`).
 
-- **`PORT`** — API port (default `3000`).
-- **`GOOGLE_MAPS_API_KEY`** — Required. Used with **Places API (New)** (`POST https://places.googleapis.com/v1/places:searchNearby`, headers `X-Goog-Api-Key` and `X-Goog-FieldMask`). Enable **Places API (New)** in the same Google Cloud project as the key, with **billing** enabled.
-- **API key restrictions** — For this **Node** server, do **not** use a key restricted only to **iOS apps**, **Android apps**, or **HTTP referrers**. Use **None** while developing, or **IP addresses** for a fixed server. Wrong restrictions cause `PERMISSION_DENIED` / `API_KEY_INVALID`.
-- **`HUMAN_DELTA_API_URL`** — Optional. If unset, recommendations still run using **generic placeholder** text per place (`sources.guidance`: `"placeholder"`). If set to Human Delta’s **`POST /v1/search`** URL (**`https://api.humandelta.ai/v1/search`**, per [Human Delta Developer Platform](https://dev.humandelta.ai/docs/intro)), the backend sends a **search-shaped** `query` and maps common search JSON into guidance. Other URLs can still use the custom `{ query, places }` → `{ items|results: [{ placeId, passages }] }` contract (see `.env.example`).
-- **`HUMAN_DELTA_API_KEY`** — Optional; sent as **`Authorization: Bearer <key>`** when set (docs show keys like `hd_live_…`).
+**Human Delta:** Official URL is `https://api.humandelta.ai/v1/search`. Unset URL → placeholder menu guidance; SMS narrative skips retrieval. **`HUMAN_DELTA_INDEX_ID`** scopes **website crawl** search when configured (see `.env.example` and `Human_delta_rest_api.txt`).
 
-### Scripts
+**Scripts:** `npm run dev` (watch), `npm run start` (once), `npm run tunnel` (expose API for the phone).
 
-- **`npm run dev`** — `tsx watch` for local development.
-- **`npm run start`** — Run once without watch.
-- **`npm run tunnel`** — `npx cloudflared tunnel --url http://127.0.0.1:3000` — exposes the API on a **`https://….trycloudflare.com`** URL so a **phone on cellular or blocked LAN** can reach your Mac. Keep this running alongside `npm run dev` when using that URL. Each new tunnel run prints a **new** URL; paste it into **`mobile/.env`** as **`EXPO_PUBLIC_API_BASE_URL`** (no trailing slash).
-
-### Smoke tests (Mac)
+**Smoke:**
 
 ```bash
 curl -s http://localhost:3000/health
@@ -79,64 +98,36 @@ curl -sS -X POST http://localhost:3000/api/nearby-restaurants \
   -d '{"latitude":37.7937,"longitude":-122.3965}'
 ```
 
-Errors and requests are logged to the terminal (`[http]`, `[api …]`).
+## Mobile scripts
 
-## Mobile app
+| Script | Use |
+|--------|-----|
+| `npm run start:cloudflare` | Restrictive Wi‑Fi / HTTPS bundle path (default for campus-style setups) |
+| `npm run start:lan` | Phone reaches Mac on LAN |
+| `npm run start` | Plain `expo start` |
+| `npm run start:tunnel` | Expo’s ngrok tunnel — often flaky; if it fails, use **`start:cloudflare`** + backend tunnel |
 
-### `mobile/.env` — `EXPO_PUBLIC_API_BASE_URL`
+## API (`/api`)
 
-This is the **base URL of the Express API** (no trailing slash). The app calls `{base}/api/recommendations`.
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/risk-assessment` | Rules-based risk |
+| `POST` | `/spike-risk` | ML regression spike path (when configured) |
+| `POST` | `/nearby-restaurants` | Places (New) nearby |
+| `POST` | `/menu-guidance` | Human Delta or placeholder |
+| `POST` | `/recommendations` | Full pipeline → ranked suggestions |
+| `POST` | `/sms-check-in-message` | Symptoms + template facts + optional HD retrieval → Gemini SMS body |
 
-| Where you run the app | Typical base URL |
-|------------------------|------------------|
-| iOS **Simulator** on the same Mac | `http://localhost:3000` |
-| **Android emulator** | `http://10.0.2.2:3000` |
-| **Physical device**, same Wi‑Fi as Mac (no AP isolation) | `http://<Mac-LAN-IP>:3000` — run `ipconfig getifaddr en0` on the Mac; backend logs also print LAN `/health` URLs on startup |
-| **Physical device**, LAN blocked (guest Wi‑Fi, **eduroam** client isolation, etc.) | Run **`npm run tunnel`** in `backend/` and set the printed **`https://….trycloudflare.com`** value here |
+## Troubleshooting (short)
 
-Important:
+- **`EADDRINUSE:3000`** — Free the port or set **`PORT`** in `backend/.env` and match **`EXPO_PUBLIC_API_BASE_URL`**.
+- **Google 403 / API not enabled** — Enable **Places API (New)** + billing; fix key restrictions.
+- **Phone: request timed out** — Open `{base}/health` in Safari on the phone; use **backend `npm run tunnel`** if LAN fails.
+- **Metro / QR on eduroam** — **`npm run start:cloudflare`**; **`EDUROAM_EXPO_VERBOSE=1`** for tunnel logs.
+- **`expo start --tunnel` / remote gone away** — `rm -rf node_modules && npm install` in **`mobile/`**; prefer **`start:cloudflare`**; see [expo#43335](https://github.com/expo/expo/issues/43335).
+- **Fast Refresh broken through trycloudflare** — Reload (`r`) in the Expo terminal after saves.
+- **Env ignored** — Restart Expo (`--clear` if needed) and backend after `.env` edits.
 
-- **`127.0.0.1` / `localhost` on a physical iPhone** refers to the **phone**, not your Mac. Use the Mac’s LAN IP or a tunnel HTTPS URL.
-- **`expo start --tunnel`** ( **`npm run start:tunnel`** ) tunnels Metro via Expo’s **bundled ngrok 2.x** path. It is **often flaky or blocked** on modern networks and accounts; Expo recommends **your own** tunnel (e.g. Cloudflare) instead — see [expo/expo#43335](https://github.com/expo/expo/issues/43335). On **campus / isolated Wi‑Fi**, use **`npm run start:cloudflare`** (not **`start:lan`**, which needs the phone to reach your Mac on the LAN).
-- The **API** URL is only **`EXPO_PUBLIC_API_BASE_URL`**. A separate tunnel + **`EXPO_PACKAGER_PROXY_URL`** is only for the **Metro bundler** when you use **`start:cloudflare`**.
+## Secrets
 
-The app shows **API: &lt;base&gt;** at the top so you can confirm what URL is baked in.
-
-### Scripts
-
-- **`npm run start:cloudflare`** — **Default for Expo Go on restrictive Wi‑Fi** (eduroam, AP isolation): **Cloudflare quick tunnel** → **Metro :8081** with **`--protocol http2`**, then **`expo start --lan`** plus **`EXPO_PACKAGER_PROXY_URL`** so the phone loads the bundle over **HTTPS**. Keep **`backend`** **`npm run dev`** and, for the API, **`npm run tunnel`** with **`EXPO_PUBLIC_API_BASE_URL`** set to that tunnel URL.
-- **`npm run start:lan`** — Only useful when the **phone can open your Mac’s LAN IP** (unrestricted home/office Wi‑Fi). **Not viable on typical eduroam** (client isolation).
-- **`npm run start`** / **`npm run start:tunnel`** — Standard Expo. **`start:tunnel` / `remote gone away`:** do **not** skip the **uninstall + reinstall** steps in **Troubleshooting** below (clean **`mobile/node_modules`**, Homebrew **ngrok** reinstall + authtoken if you use it) **before** assuming the network alone is the problem; then prefer **`start:cloudflare`** if tunnel still fails.
-
-Optional environment (shell only, not required in `.env` unless you want them permanent):
-
-- **`EDUROAM_EXPO_VERBOSE=1`** — Stream full **cloudflared** logs while **`start:cloudflare`** starts.
-- **`EDUROAM_EXPO_CF_PROTOCOL=auto`** — Let **cloudflared** pick the protocol (defaults to **`http2`** in the script).
-
-## API overview (`/api` on the backend)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/api/risk-assessment` | Rules-based risk from context (respects urgent symptom escalation) |
-| `POST` | `/api/nearby-restaurants` | Google Places (New) nearby restaurants |
-| `POST` | `/api/menu-guidance` | Human Delta retrieval, or placeholder rows if URL unset |
-| `POST` | `/api/recommendations` | Full flow: safety → risk → Google → Human Delta or placeholder → top 3 |
-
-## Troubleshooting
-
-- **`EADDRINUSE` on port 3000** — Another Node process is using the port. Stop it, e.g. `kill $(lsof -tiTCP:3000)`, or set **`PORT=3001`** in `backend/.env` and point **`EXPO_PUBLIC_API_BASE_URL`** at the new port.
-- **Google `403` / “Places API (New) has not been used…”** — Enable **Places API (New)** for the key’s project, enable **billing**, fix **key restrictions** as above.
-- **Phone “network request timed out”** — Phone cannot reach the API host. Confirm Safari can open **`{base}/health`**. If LAN IP never loads, use **`npm run tunnel`** in **`backend/`** and the **trycloudflare** HTTPS base URL in **`mobile/.env`**.
-- **Eduroam: phone cannot open Metro / QR never loads** — Use **`npm run start:cloudflare`** in **`mobile/`**. If **cloudflared** exits immediately, read the script’s dumped logs; try **`EDUROAM_EXPO_VERBOSE=1`**. If tunnels never come up, the network may block **outbound** tunnel traffic — try **GlobalProtect / another campus network**, or develop against the **iOS Simulator** on the Mac (`npx expo start`).
-- **Edits don’t show up live while using `start:cloudflare`** — **Fast Refresh** depends on a **WebSocket** to Metro; **trycloudflare** often breaks or delays that. Press **`r`** in the Expo terminal to **reload** after saves, or **restart** `start:cloudflare` if reload hangs.
-- **`expo start --tunnel` / `remote gone away`** — Treat this as a **broken local toolchain first**, then fall back to Cloudflare. Do these **in order** (skipping reinstall is the usual reason fixes “don’t work”):
-  1. **Clean reinstall Metro deps** (from **`mobile/`**): `rm -rf node_modules && npm install`, then retry tunnel with **`npx expo start --tunnel`** (equivalent to `npm run start:tunnel`).
-  2. **If you use Homebrew ngrok** (separate from Expo’s bundled agent): `brew uninstall ngrok && brew install ngrok` (or `brew reinstall ngrok`), then `ngrok config add-authtoken <token>` from the ngrok dashboard.
-  3. If tunnel still fails: **`npm run start:cloudflare`** in **`mobile/`** (recommended on campus / flaky ngrok); keep **`backend`** **`npm run tunnel`** for **`EXPO_PUBLIC_API_BASE_URL`** when the phone cannot use your LAN IP. See [expo#43335](https://github.com/expo/expo/issues/43335).
-  4. Last resort: **iOS Simulator** on the Mac (`npx expo start`) — no Metro tunnel needed.
-- **Stale tools after many experiments** — Same **`mobile/`** **`node_modules`** reinstall as above when Metro or **cloudflared** behave oddly; restart **`start:cloudflare`** or use **`EDUROAM_EXPO_VERBOSE=1`** to inspect tunnel logs.
-- **`.env` not picked up** — Restart Expo ( **`--clear`** if needed). Restart **`npm run dev`** after editing **`backend/.env`**.
-
-## Git / secrets
-
-`backend/.env` and `mobile/.env` are listed in `.gitignore`. Do not commit API keys or tunnel URLs you treat as sensitive.
+`backend/.env` and `mobile/.env` are gitignored. Do not commit keys or long-lived tunnel URLs you treat as sensitive.

@@ -503,3 +503,83 @@ export async function synthesizeGuidanceWithGemini(params: {
     };
   });
 }
+
+const SMS_NARRATIVE_MAX_CHARS = 1900;
+const SMS_RETRIEVAL_CONTEXT_MAX = 12_000;
+
+/**
+ * One plain-text SMS body: merges CGM/template facts with optional Human Delta (e.g. ADA-indexed) passages.
+ */
+export async function synthesizeSmsCheckInNarrative(params: {
+  apiKey: string;
+  model?: string;
+  useVertex?: boolean;
+  vertexProjectId?: string;
+  vertexLocation?: string;
+  /** Joined retrieval snippets; may be empty when Human Delta is off or returned no hits. */
+  retrievedContext: string;
+  /** Structured facts for the model (template fields, symptoms, recent spike events). */
+  userBlock: string;
+}): Promise<string> {
+  const { apiKey, model, useVertex, vertexProjectId, vertexLocation, retrievedContext, userBlock } = params;
+  const key = apiKey.trim();
+  if (!key) {
+    throw new IntegrationError(
+      'VERTEX_GEMINI_API_KEY (or legacy GEMINI_API_KEY / GOOGLE_API_KEY) is required for SMS narrative.',
+      503,
+    );
+  }
+
+  const ctx = retrievedContext.trim();
+  const hasRetrieval = ctx.length > 0;
+  const clipped = hasRetrieval ? ctx.slice(0, SMS_RETRIEVAL_CONTEXT_MAX) : '';
+
+  const modelId = (model?.trim() || 'gemini-2.5-flash').replace(/^models\//, '');
+  const url = buildGeminiGenerateContentUrl({
+    modelId,
+    apiKey: key,
+    useVertex: Boolean(useVertex),
+    vertexProjectId,
+    vertexLocation,
+  });
+  const backend = useVertex ? 'vertex' : 'google_ai';
+
+  const systemText = [
+    'You draft one SMS text message body for a diabetes self-management hackathon demo (Tide Together).',
+    'Audience: a trusted emergency contact who should understand what is going on in plain language.',
+    'Not medical advice; do not diagnose or prescribe. No markdown, no bullet lists — short paragraphs or line breaks are OK.',
+    `Keep the entire message under ${SMS_NARRATIVE_MAX_CHARS} characters (phone SMS limits).`,
+    hasRetrieval
+      ? 'RETRIEVED_CONTEXT below comes from Human Delta vector search over configured indexes (e.g. crawled patient-education websites). You may summarize or paraphrase ideas that appear there. Prefer at least one concrete idea grounded in RETRIEVED_CONTEXT when it is non-empty. Do not claim statistics or emergency thresholds unless they appear verbatim in RETRIEVED_CONTEXT. If something is uncertain, use cautious wording.'
+      : 'There is no RETRIEVED_CONTEXT (Human Delta returned nothing or is not configured). Report only USER_FACTS; do not invent ADA or clinician guidance.',
+    'In USER_FACTS, the fields name and contact_name refer to the SMS recipient (the trusted contact the message is sent to), not the patient. Greet them by name when set. The patient is the Tide Together user sending the check-in; first person from the patient is appropriate. Include current glucose, trend, time, and coordinates from USER_FACTS when provided.',
+    'Reported symptoms: if USER_FACTS lists any (not "none selected"), include a compact plain-language explanation of what each might mean or why a contact should care — always as possibilities ("could", "might", "sometimes linked to"), never a definitive diagnosis or prescription. Prefer wording supported by RETRIEVED_CONTEXT when it discusses those symptoms or related topics; if retrieval is silent, say something like "no specific symptoms mentioned". If no symptoms were selected, omit this.',
+    'If USER_FACTS lists recent spike events, mention them briefly as context.',
+    'End with a short request to check in if they can, in a warm tone.',
+  ].join(' ');
+
+  const userText = [
+    '### USER_FACTS',
+    userBlock.trim(),
+    '',
+    '### RETRIEVED_CONTEXT',
+    hasRetrieval ? clipped : '(none — do not invent indexed medical passages.)',
+  ].join('\n');
+
+  const { text } = await geminiGeneratePartText({
+    url,
+    backend,
+    systemText,
+    userText,
+    temperature: 0.25,
+  });
+
+  let out = stripOuterCodeFence(text).trim();
+  if (!out) {
+    throw new IntegrationError(`Gemini (${backend}) returned empty SMS narrative.`, 502);
+  }
+  if (out.length > SMS_NARRATIVE_MAX_CHARS) {
+    out = `${out.slice(0, SMS_NARRATIVE_MAX_CHARS - 1).trimEnd()}…`;
+  }
+  return out;
+}

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Diabetes Support (Demo)",
-    "slug": "diabetes-support-demo",
+    "name": "Tide Together",
+    "slug": "tide-together",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,7 +20,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }
-      }
+      },
+      "bundleIdentifier": "com.martindnha.tidetogether"
     },
     "android": {
       "usesCleartextTraffic": true,
@@ -28,9 +29,15 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.martindnha.tidetogether"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -40,7 +47,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Diabetes Support (Demo) to use your location to find nearby food options."
+          "locationWhenInUsePermission": "Allow Tide Together to use your location to find nearby food options."
         }
       ]
     ],

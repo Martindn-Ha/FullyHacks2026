@@ -630,3 +630,101 @@ export function buildPlaceholderGuidance(places: PlaceCandidate[]): PlaceGuidanc
     ],
   }));
 }
+
+/**
+ * Vector search without Google `places` binding — for example ADA / diabetes.org content indexed under
+ * `HUMAN_DELTA_INDEX_ID` when `HUMAN_DELTA_SOURCES` is web-only (same env as `retrieveMenuGuidance`).
+ */
+export async function searchHumanDeltaTextPassages(params: {
+  query: string;
+  apiUrl?: string;
+  apiKey?: string;
+}): Promise<string[]> {
+  const { query, apiUrl, apiKey } = params;
+  const q = query.trim();
+  if (!q || !apiUrl?.trim()) {
+    return [];
+  }
+
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (apiKey?.trim()) {
+    headers.authorization = `Bearer ${apiKey.trim()}`;
+  }
+
+  const url = apiUrl.trim();
+  if (!isHumanDeltaOfficialSearchUrl(url)) {
+    console.warn(
+      '[humanDeltaClient] searchHumanDeltaTextPassages: URL is not official POST /v1/search; skipping retrieval.',
+    );
+    return [];
+  }
+
+  const hdSearch = officialSearchBodyFromEnv();
+  const crawlIndexId = process.env.HUMAN_DELTA_INDEX_ID?.trim();
+  const srcLower = hdSearch.sources.map((s) => s.toLowerCase());
+  const wantsWeb = srcLower.includes('web');
+  let sources = [...hdSearch.sources];
+  let index_id = hdSearch.index_id;
+  /**
+   * `officialSearchBodyFromEnv` only sets `index_id` for web-only `sources` (see comment there: avoids
+   * menu-search pitfalls when `documents` is included). SMS check-in retrieval still needs the crawled
+   * website index when `HUMAN_DELTA_INDEX_ID` is set — otherwise passages never come from that index.
+   */
+  if (crawlIndexId && wantsWeb && !index_id) {
+    sources = ['web'];
+    index_id = crawlIndexId;
+    console.info(
+      '[humanDeltaClient] searchHumanDeltaTextPassages: using web + HUMAN_DELTA_INDEX_ID for SMS retrieval (documents corpus omitted on this request).',
+    );
+  }
+
+  const body = {
+    query: q,
+    top_k: Math.min(20, Math.max(4, hdSearch.top_k + 4)),
+    sources,
+    ...(index_id ? { index_id } : {}),
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(HUMAN_DELTA_FETCH_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (isAbortOrTimeout(e)) {
+      console.warn(
+        `[humanDeltaClient] searchHumanDeltaTextPassages: timed out after ${HUMAN_DELTA_FETCH_TIMEOUT_MS / 1000}s.`,
+      );
+      return [];
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[humanDeltaClient] searchHumanDeltaTextPassages: request failed: ${msg}`);
+    return [];
+  }
+
+  const rawText = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      console.warn(
+        `[humanDeltaClient] searchHumanDeltaTextPassages: HTTP ${res.status} (auth). ${rawText.slice(0, 200)}`,
+      );
+      return [];
+    }
+    console.warn(`[humanDeltaClient] searchHumanDeltaTextPassages: HTTP ${res.status}: ${rawText.slice(0, 400)}`);
+    return [];
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(rawText) as unknown;
+  } catch {
+    return [];
+  }
+
+  const snippets = extractSnippetsFromSearchJson(json);
+  const out = [...new Set(snippets.map((s) => s.trim()).filter(Boolean))];
+  return out.slice(0, 14);
+}

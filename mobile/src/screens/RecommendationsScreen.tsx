@@ -326,6 +326,16 @@ export function RecommendationsScreen() {
           </Pressable>
         </View>
 
+        {loading ? (
+          <View style={styles.inlineFetchBanner} accessibilityLiveRegion="polite">
+            <ActivityIndicator color="#0f766e" />
+            <Text style={styles.inlineFetchBannerText}>
+              Fetching meal and movement ideas… first run can take a couple of minutes (check Demo settings for
+              errors).
+            </Text>
+          </View>
+        ) : null}
+
         {showStructured ? <StructuredResults data={recommendationResults} /> : null}
         {showFallback ? <FallbackResultCard text={resultText} /> : null}
       </ScrollView>
@@ -570,6 +580,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#64748b',
     lineHeight: 19,
+  },
+  inlineFetchBanner: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.95)',
+  },
+  inlineFetchBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#334155',
+    lineHeight: 18,
   },
   resultsBlock: { marginTop: 14, gap: 16 },
   diveLogChip: {
